@@ -26,6 +26,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -34,9 +40,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -53,6 +63,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -74,17 +85,21 @@ import com.tomatoinsight.ui.components.CustomBottomBar
 import com.tomatoinsight.ui.components.InternetConnectionNotice
 import com.tomatoinsight.ui.theme.TomatoRed
 import com.tomatoinsight.util.PASSWORD_REQUIREMENTS_HINT
+import com.tomatoinsight.util.hasValidatedInternet
+import com.tomatoinsight.util.observeValidatedInternet
 import com.tomatoinsight.util.passwordValidationError
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-private val PageBackground = Color(0xFFE7EEF8)
-private val Ink = Color(0xFF243046)
-private val Muted = Color(0xFF8B95A8)
-private val Orange = Color(0xFFF27A1A)
-private val FieldBorder = Color(0xFFE3E8F0)
+private val PageBackground = Color(0xFFFFFCF9)
+private val Ink = Color(0xFF202421)
+private val Muted = Color(0xFF656B67)
+private val Orange = Color(0xFF1F7A35)
+private val SoftGreen = Color(0xFFE8F2E5)
+private val Divider = Color(0xFF202421).copy(alpha = 0.10f)
+private val FieldBorder = Color(0xFFDDE2DC)
 
 data class ProfileSaveResult(val ok: Boolean, val message: String)
 
@@ -115,6 +130,9 @@ fun ProfileScreen(
     val showCreditReminder = creditsLoaded && !profileBonusGranted
     val user = auth.currentUser
     val context = LocalContext.current
+    val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
+        context.observeValidatedInternet().collect { value = it }
+    }
     val email = farmerProfile.email.ifBlank { user?.email.orEmpty() }
     val tileCount = if (farmRows > 0 && farmColumns > 0) farmRows * farmColumns else 0
     val weekLabel = if (selectedFarmWeek in FIRST_FARM_WEEK..LAST_FARM_WEEK) selectedFarmWeek else null
@@ -141,6 +159,7 @@ fun ProfileScreen(
     var photoStatus by remember { mutableStateOf<String?>(null) }
     var photoStatusOk by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
+    var isEditingProfile by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showChangePasswordDialog by remember { mutableStateOf(false) }
     var passwordChangeMessage by remember { mutableStateOf<String?>(null) }
@@ -212,12 +231,26 @@ fun ProfileScreen(
         .ifBlank { user?.displayName?.trim().orEmpty() }
         .ifBlank { "Tomato Insight user" }
 
+    val tasks = farmTasks(
+        firstName,
+        lastName,
+        farmName,
+        farmerProfile.photo != null,
+        tileCount,
+        scanCount,
+        weekLabel,
+        onNavigateToHome,
+        onNavigateToMonitoring,
+        onUploadPhoto = { photoPicker.launch("image/*") }
+    )
+    val doneCount = tasks.count { it.done }
+
     Scaffold(
         containerColor = PageBackground,
         bottomBar = {
             CustomBottomBar(
                 selectedTab = "profile",
-                cameraEnabled = false,
+                cameraEnabled = true,
                 onHomeClick = onNavigateToHome,
                 onMonitoringClick = onNavigateToMonitoring,
                 onCameraClick = onCameraClick,
@@ -231,328 +264,348 @@ fun ProfileScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
         ) {
             InternetConnectionNotice(
-                modifier = Modifier.padding(horizontal = 20.dp).padding(top = 8.dp)
+                modifier = Modifier.padding(top = 8.dp)
             )
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(top = 8.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.End,
+                    .padding(top = 20.dp, bottom = 22.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ConnectionStatusIndicator()
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Profile",
+                        color = Ink,
+                        fontSize = 32.sp,
+                        lineHeight = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.6).sp
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Manage your farm and account", color = Muted, fontSize = 15.sp)
+                }
+                ConnectionStatusIndicator(labelColor = Ink, dotSize = 9.dp)
             }
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-            ProfileCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            modifier = Modifier
-                                .size(84.dp)
-                                .clip(CircleShape)
-                                .background(Brush.linearGradient(listOf(Color(0xFF43A047), Color(0xFF1B5E20))))
-                                .clickable { photoPicker.launch("image/*") },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val photo = farmerProfile.photo
-                            if (photo != null) {
-                                Image(
-                                    bitmap = photo.asImageBitmap(),
-                                    contentDescription = "Profile photo",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Text(
-                                    text = profileInitials(farmerProfile, email),
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 24.sp
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .size(26.dp)
-                                    .clip(CircleShape)
-                                    .background(Orange)
-                                    .border(2.dp, Color.White, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                androidx.compose.material3.Icon(
-                                    imageVector = Icons.Default.PhotoCamera,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(76.dp)
+                        .clip(CircleShape)
+                        .background(Orange)
+                        .clickable { photoPicker.launch("image/*") },
+                    contentAlignment = Alignment.Center
+                ) {
+                    val photo = farmerProfile.photo
+                    if (photo != null) {
+                        Image(
+                            bitmap = photo.asImageBitmap(),
+                            contentDescription = "Profile photo",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
                         Text(
-                            text = "Upload photo",
+                            text = profileInitials(farmerProfile, email),
                             color = Color.White,
-                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 22.sp
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(24.dp)
+                            .clip(CircleShape)
+                            .background(Orange)
+                            .border(2.dp, PageBackground, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = "Change profile photo",
+                            tint = Color.White,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = displayName,
+                            modifier = Modifier.weight(1f),
+                            color = Ink,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Active",
+                            color = Orange,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
-                                .background(Orange)
-                                .clickable { photoPicker.launch("image/*") }
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .background(SoftGreen)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
-                        if (farmerProfile.photo != null) {
-                            TextButton(onClick = {
-                                photoStatus = "Removing photo…"
-                                scope.launch {
-                                    val result = onProfileSaved(
-                                        farmerProfile.copy(
-                                            firstName = firstName.trim(),
-                                            middleInitial = middleInitial.trim().uppercase().take(1),
-                                            lastName = lastName.trim(),
-                                            farmName = farmName.trim(),
-                                            email = email,
-                                            photo = null
-                                        ),
-                                        true
-                                    )
-                                    photoStatusOk = result.ok
-                                    photoStatus = if (result.ok) "Photo removed." else result.message
-                                }
-                            }) {
-                                Text("Remove", color = Muted, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text("Grower · ${farmName.trim().ifBlank { "Your farm" }}", color = Muted, fontSize = 13.sp)
+                    Text(
+                        text = email.ifBlank { "No email available" },
+                        color = Muted,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            onClick = { isEditingProfile = true },
+                            shape = RoundedCornerShape(9.dp),
+                            color = PageBackground,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Orange)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = Orange,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Edit profile", color = Orange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Change photo",
+                            color = Orange,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier.clickable { photoPicker.launch("image/*") }
+                        )
+                        if (farmerProfile.photo != null) {
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = displayName,
-                                modifier = Modifier.weight(1f),
-                                color = Ink,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "Active",
-                                color = Color(0xFF128C7E),
+                                text = "Remove",
+                                color = Muted,
+                                fontWeight = FontWeight.SemiBold,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(20.dp))
-                                    .background(Color(0xFFD9F6F3))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                                modifier = Modifier.clickable {
+                                    photoStatus = "Removing photo…"
+                                    scope.launch {
+                                        val result = onProfileSaved(
+                                            farmerProfile.copy(
+                                                firstName = firstName.trim(),
+                                                middleInitial = middleInitial.trim().uppercase().take(1),
+                                                lastName = lastName.trim(),
+                                                farmName = farmName.trim(),
+                                                email = email,
+                                                photo = null
+                                            ),
+                                            true
+                                        )
+                                        photoStatusOk = result.ok
+                                        photoStatus = if (result.ok) "Photo removed." else result.message
+                                    }
+                                }
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ProfileFact("Role", "Grower")
-                        ProfileFact("Farm", farmName.trim().ifBlank { "Your farm" })
-                        ProfileFact("Email", email.ifBlank { "—" })
-                        ProfileFact("Tiles", tileCount.toString())
-                        ProfileFact("Scans", scanCount.toString())
-                        ProfileFact("Week", weekLabel?.toString() ?: "—")
-                        ProfileFact(
-                            "Credits",
-                            if (creditsLoaded && creditBalance != null) creditBalance.toString() else "—"
-                        )
-                    }
-                }
-                photoStatus?.let { message ->
-                    Text(
-                        text = message,
-                        color = if (photoStatusOk) Color(0xFF1B5E20) else Color(0xFFB71C1C),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onOpenCreditPlans,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Color.White)
-                ) {
-                    Text("Top up credits", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = onNavigateToHome,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF4F7FB), contentColor = Ink)
-                    ) {
-                        Text("Open farm", fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
-                    }
-                    Button(
-                        onClick = { showLogoutDialog = true },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = TomatoRed),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x44C62828))
-                    ) {
-                        Text("Sign out", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                 }
             }
 
-            ProfileCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        val cal = Calendar.getInstance()
-                        cal.set(year, month, 1)
-                        cal.add(Calendar.MONTH, -1)
-                        year = cal.get(Calendar.YEAR)
-                        month = cal.get(Calendar.MONTH)
-                    }) { Text("‹", color = Ink, fontSize = 22.sp) }
-                    Text(
-                        text = monthTitle(year, month),
-                        modifier = Modifier.weight(1f),
-                        textAlign = TextAlign.Center,
-                        fontWeight = FontWeight.Bold,
-                        color = Ink
-                    )
-                    TextButton(onClick = {
-                        val cal = Calendar.getInstance()
-                        cal.set(year, month, 1)
-                        cal.add(Calendar.MONTH, 1)
-                        year = cal.get(Calendar.YEAR)
-                        month = cal.get(Calendar.MONTH)
-                    }) { Text("›", color = Ink, fontSize = 22.sp) }
-                }
-                ProfileMonth(
-                    year = year,
-                    month = month,
-                    calendar = scanCalendar,
-                    onDate = { iso ->
-                        if (!scanCalendar.enabled) return@ProfileMonth
-                        val result = scanCalendar.chooseDate(iso)
-                        calendarNote = result.second
-                        onScanCalendarChanged(result.first)
-                    }
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = if (scanCalendar.enabled) "Custom dates on" else "Custom dates",
-                        color = if (scanCalendar.enabled) Color.White else Ink,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(if (scanCalendar.enabled) Orange else Color(0xFFEEF2F7))
-                            .clickable {
-                                val next = scanCalendar.copy(enabled = !scanCalendar.enabled)
-                                calendarNote = next.describe()
-                                onScanCalendarChanged(next)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                    if (scanCalendar.enabled) {
-                        Text(
-                            text = "Reset dates",
-                            color = Color(0xFF8B3A3A),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(20.dp))
-                                .border(1.dp, Color(0xFFE4C4C4), RoundedCornerShape(20.dp))
-                                .clickable {
-                                    val next = ScanCalendar(enabled = true)
-                                    calendarNote = "Dates cleared. Tap a new first scan day to start Week 4 again."
-                                    onScanCalendarChanged(next)
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                        )
-                    }
-                }
+            photoStatus?.let { message ->
                 Text(
-                    text = calendarNote,
-                    color = Color(0xFF66758C),
+                    text = message,
+                    color = if (photoStatusOk) Orange else Color(0xFFB71C1C),
                     fontSize = 12.sp,
                     modifier = Modifier.padding(top = 8.dp)
                 )
             }
 
-            ProfileCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Farm activity",
-                        modifier = Modifier.weight(1f),
-                        fontWeight = FontWeight.Bold,
-                        color = Ink,
-                        fontSize = 16.sp
+            Spacer(modifier = Modifier.height(20.dp))
+            ProfileSummaryBand(
+                credits = if (creditsLoaded && creditBalance != null) creditBalance.toString() else "—",
+                tiles = tileCount.toString(),
+                scans = scanCount.toString(),
+                week = weekLabel?.let { "Week $it" } ?: "Week —"
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = onOpenCreditPlans,
+                    enabled = internetAvailable,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Orange,
+                        contentColor = Color.White,
+                        disabledContainerColor = Color(0xFFE0E0E0),
+                        disabledContentColor = Color(0xFF8B8B8B)
                     )
-                    Text(
-                        text = "View all",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(Orange)
-                            .clickable(onClick = onNavigateToHistory)
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
+                ) {
+                    Text(if (internetAvailable) "Top up credits" else "Top up offline", fontWeight = FontWeight.Bold)
                 }
-                Spacer(modifier = Modifier.height(10.dp))
-                if (tileCount == 0) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFFF4F7FB))
-                            .padding(12.dp)
-                    ) {
-                        Text("No farm layout yet", fontWeight = FontWeight.Bold, color = Ink)
-                        Text(
-                            "Set rows and columns on Home to start tracking plants.",
-                            color = Color(0xFF66758C),
-                            fontSize = 13.sp
-                        )
-                    }
-                } else {
-                    val week = weekLabel?.let { "Week $it" } ?: "No week selected"
-                    val scans = if (scanCount == 1) "1 saved scan" else "$scanCount saved scans"
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFF16324F))
-                            .padding(12.dp)
-                    ) {
-                        Text(week, fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(
-                            "$scans on this farm. Open Monitoring to compare the latest result.",
-                            color = Color.White.copy(alpha = 0.82f),
-                            fontSize = 13.sp
-                        )
-                    }
+                OutlinedButton(
+                    onClick = onNavigateToHome,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Orange),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Orange)
+                ) {
+                    Text("Open farm", fontWeight = FontWeight.Bold)
                 }
             }
 
-            formError?.let { ProfileMessage(it, error = true) }
-            formSuccess?.let { ProfileMessage(it, error = false) }
-            passwordChangeMessage?.let { ProfileMessage(it, error = false) }
-
-            ProfileCard {
-                SectionHead("Basic information", "Editable")
-                if (showCreditReminder) {
-                    Text(
-                        text = "After all 6 farm setup steps are done, tap Update profile to earn 5 bonus scan credits (one time).",
-                        color = Color(0xFF8A5A12),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 8.dp)
+            Spacer(modifier = Modifier.height(28.dp))
+            ProfileSectionHeader("Farm activity", "View all", onNavigateToHistory)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onNavigateToHistory)
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier.size(46.dp).clip(RoundedCornerShape(12.dp)).background(SoftGreen),
+                    contentAlignment = Alignment.Center
+                ) {
+                    androidx.compose.material3.Icon(
+                        Icons.Default.CalendarMonth,
+                        contentDescription = null,
+                        tint = Orange,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(weekLabel?.let { "Week $it" } ?: "No week selected", color = Ink, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = when {
+                            tileCount == 0 -> "Set up your farm layout to begin"
+                            scanCount == 1 -> "1 saved scan · View the latest result"
+                            else -> "$scanCount saved scans · View your results"
+                        },
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                }
+                androidx.compose.material3.Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = "View farm activity",
+                    tint = Muted
+                )
+            }
+            ProfileDivider()
+
+            Spacer(modifier = Modifier.height(26.dp))
+            ProfileSectionHeader("Farm schedule")
+            Spacer(modifier = Modifier.height(10.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = Color.White.copy(alpha = 0.56f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Divider)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            val cal = Calendar.getInstance()
+                            cal.set(year, month, 1)
+                            cal.add(Calendar.MONTH, -1)
+                            year = cal.get(Calendar.YEAR)
+                            month = cal.get(Calendar.MONTH)
+                        }) { Text("‹", color = Ink, fontSize = 22.sp) }
+                        Text(
+                            text = monthTitle(year, month),
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            fontWeight = FontWeight.Bold,
+                            color = Ink
+                        )
+                        TextButton(onClick = {
+                            val cal = Calendar.getInstance()
+                            cal.set(year, month, 1)
+                            cal.add(Calendar.MONTH, 1)
+                            year = cal.get(Calendar.YEAR)
+                            month = cal.get(Calendar.MONTH)
+                        }) { Text("›", color = Ink, fontSize = 22.sp) }
+                    }
+                    ProfileMonth(
+                        year = year,
+                        month = month,
+                        calendar = scanCalendar,
+                        onDate = { iso ->
+                            if (!scanCalendar.enabled) return@ProfileMonth
+                            val result = scanCalendar.chooseDate(iso)
+                            calendarNote = result.second
+                            onScanCalendarChanged(result.first)
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (scanCalendar.enabled) "✓  Custom dates on" else "Custom dates",
+                            color = if (scanCalendar.enabled) Orange else Ink,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (scanCalendar.enabled) SoftGreen else Color(0xFFF2F3EF))
+                                .clickable {
+                                    val next = scanCalendar.copy(enabled = !scanCalendar.enabled)
+                                    calendarNote = next.describe()
+                                    onScanCalendarChanged(next)
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                        if (scanCalendar.enabled) {
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Reset dates",
+                                color = Orange,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                modifier = Modifier.clickable {
+                                    val next = ScanCalendar(enabled = true)
+                                    calendarNote = "Dates cleared. Tap a new first scan day to start Week 4 again."
+                                    onScanCalendarChanged(next)
+                                }
+                            )
+                        }
+                    }
+                    Text(calendarNote, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+            ProfileSectionHeader(
+                title = "Personal & farm details",
+                actionLabel = if (isEditingProfile) "Done" else "Edit",
+                onAction = { isEditingProfile = !isEditingProfile }
+            )
+            if (showCreditReminder) {
+                Text(
+                    text = "Complete all six setup steps, then update your profile to earn 5 bonus scan credits.",
+                    color = Color(0xFF7A5A15),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            if (isEditingProfile) {
                 ProfileField("First name", firstName) { firstName = it; formError = null; formSuccess = null }
                 Spacer(modifier = Modifier.height(8.dp))
                 ProfileField("Last name", lastName) { lastName = it; formError = null; formSuccess = null }
@@ -568,37 +621,18 @@ fun ProfileScreen(
                     formError = null
                     formSuccess = null
                 }
+            } else {
+                ProfileDetailRow("First name", firstName)
+                ProfileDetailRow("Last name", lastName)
+                ProfileDetailRow("Middle initial", middleInitial)
+                ProfileDetailRow("Farm name", farmName)
             }
 
-            ProfileCard {
-                SectionHead("Account", "Not editable")
-                Spacer(modifier = Modifier.height(10.dp))
-                Text("Email address", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = {},
-                    readOnly = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = profileFieldColors()
-                )
-                TextButton(onClick = { showChangePasswordDialog = true }) {
-                    Text("Change password", color = Ink, fontWeight = FontWeight.Bold)
-                }
-            }
+            formError?.let { ProfileMessage(it, error = true) }
+            formSuccess?.let { ProfileMessage(it, error = false) }
+            passwordChangeMessage?.let { ProfileMessage(it, error = false) }
 
-            ProfileCard {
-                SectionHead("Farm snapshot", null)
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SnapshotChip(Modifier.weight(1f), "$tileCount tiles")
-                    SnapshotChip(Modifier.weight(1f), if (scanCount == 1) "1 scan" else "$scanCount scans")
-                    SnapshotChip(Modifier.weight(1f), weekLabel?.let { "Week $it" } ?: "Week —")
-                }
-            }
-
+            Spacer(modifier = Modifier.height(10.dp))
             Button(
                 onClick = {
                     val next = FarmerProfile(
@@ -610,99 +644,97 @@ fun ProfileScreen(
                         photo = farmerProfile.photo
                     )
                     when {
-                        next.firstName.isBlank() || next.lastName.isBlank() ->
+                        next.firstName.isBlank() || next.lastName.isBlank() -> {
                             formError = "First name and last name are required."
-                        next.middleInitial.isNotEmpty() && !next.middleInitial.matches(Regex("[A-Z]")) ->
+                            isEditingProfile = true
+                        }
+                        next.middleInitial.isNotEmpty() && !next.middleInitial.matches(Regex("[A-Z]")) -> {
                             formError = "Middle initial must be a single letter."
+                            isEditingProfile = true
+                        }
                         else -> {
                             formError = null
                             isSaving = true
                             scope.launch {
                                 val result = onProfileSaved(next, false)
                                 isSaving = false
-                                if (result.ok) formSuccess = result.message else formError = result.message
+                                if (result.ok) {
+                                    formSuccess = result.message
+                                    isEditingProfile = false
+                                } else {
+                                    formError = result.message
+                                }
                             }
                         }
                     }
                 },
                 enabled = !isSaving,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Color.White)
             ) {
                 Text(if (isSaving) "Saving…" else "Update profile", fontWeight = FontWeight.Bold)
             }
 
-            val tasks = farmTasks(
-                firstName,
-                lastName,
-                farmName,
-                farmerProfile.photo != null,
-                tileCount,
-                scanCount,
-                weekLabel,
-                onNavigateToHome,
-                onNavigateToMonitoring,
-                onUploadPhoto = { photoPicker.launch("image/*") }
+            Spacer(modifier = Modifier.height(28.dp))
+            ProfileSectionHeader("Account")
+            Spacer(modifier = Modifier.height(8.dp))
+            ProfileAccountRow(
+                icon = Icons.Default.MailOutline,
+                label = "Email address",
+                value = email.ifBlank { "Not available" }
             )
-            val doneCount = tasks.count { it.done }
-            ProfileCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Farm setup",
-                        modifier = Modifier.weight(1f),
-                        fontWeight = FontWeight.Bold,
-                        color = Ink,
-                        fontSize = 16.sp
-                    )
-                    Text("$doneCount of ${tasks.size} done", color = Muted, fontSize = 12.sp)
-                }
-                if (showCreditReminder) {
-                    Text(
-                        text = "Finish all six farm setup steps, then tap Update profile for 5 additional scan credits.",
-                        color = Color(0xFF8A5A12),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                tasks.forEach { task ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(18.dp)
-                                .clip(CircleShape)
-                                .background(if (task.done) Color(0xFF1B5E20) else Color.Transparent)
-                                .border(1.5.dp, if (task.done) Color(0xFF1B5E20) else Muted, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (task.done) {
-                                Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(task.title, fontWeight = FontWeight.Bold, color = Ink, fontSize = 14.sp)
-                            Text(task.note, color = Muted, fontSize = 12.sp)
-                        }
-                        if (task.action != null && task.link != null) {
-                            Text(
-                                text = task.link,
-                                color = Orange,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                modifier = Modifier.clickable(onClick = task.action)
-                            )
-                        }
-                    }
-                }
+            ProfileDivider()
+            ProfileAccountRow(
+                icon = Icons.Default.Lock,
+                label = "Change password",
+                value = null,
+                onClick = { showChangePasswordDialog = true }
+            )
+            ProfileDivider()
+            Text("Email cannot be edited.", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+
+            Spacer(modifier = Modifier.height(28.dp))
+            ProfileSectionHeader("Farm setup", "$doneCount of ${tasks.size} complete")
+            Spacer(modifier = Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { doneCount.toFloat() / tasks.size.coerceAtLeast(1) },
+                modifier = Modifier.fillMaxWidth().height(7.dp).clip(CircleShape),
+                color = Orange,
+                trackColor = SoftGreen
+            )
+            if (showCreditReminder) {
+                Text(
+                    text = "Complete your setup to earn 5 bonus scan credits.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                )
+            } else {
+                Spacer(modifier = Modifier.height(6.dp))
             }
+            tasks.forEach { task ->
+                ProfileSetupTaskRow(task)
+                ProfileDivider()
             }
+
+            Spacer(modifier = Modifier.height(22.dp))
+            OutlinedButton(
+                onClick = { showLogoutDialog = true },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, TomatoRed),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = TomatoRed)
+            ) {
+                androidx.compose.material3.Icon(
+                    Icons.AutoMirrored.Filled.Logout,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Sign out", fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 
@@ -744,6 +776,159 @@ private fun ProfileCard(content: @Composable () -> Unit) {
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(14.dp)) { content() }
+    }
+}
+
+@Composable
+private fun ProfileSummaryBand(credits: String, tiles: String, scans: String, week: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = SoftGreen
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(82.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ProfileSummaryStat(credits, "Credits", Modifier.weight(1f))
+            ProfileSummaryDivider()
+            ProfileSummaryStat(tiles, "Tiles", Modifier.weight(1f))
+            ProfileSummaryDivider()
+            ProfileSummaryStat(scans, "Scan", Modifier.weight(1f))
+            ProfileSummaryDivider()
+            ProfileSummaryStat(week, "", Modifier.weight(1.15f))
+        }
+    }
+}
+
+@Composable
+private fun ProfileSummaryStat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, color = Ink, fontSize = if (value.startsWith("Week")) 15.sp else 22.sp, fontWeight = FontWeight.Bold)
+        if (label.isNotBlank()) Text(label, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun ProfileSummaryDivider() {
+    Box(modifier = Modifier.width(1.dp).height(38.dp).background(Divider))
+}
+
+@Composable
+private fun ProfileSectionHeader(
+    title: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = title,
+            modifier = Modifier.weight(1f),
+            color = Ink,
+            fontSize = 20.sp,
+            lineHeight = 24.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = (-0.2).sp
+        )
+        if (actionLabel != null) {
+            Text(
+                text = actionLabel,
+                color = if (onAction != null) Orange else Muted,
+                fontSize = 12.sp,
+                fontWeight = if (onAction != null) FontWeight.Bold else FontWeight.Medium,
+                modifier = if (onAction != null) Modifier.clickable(onClick = onAction) else Modifier
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProfileDivider() {
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Divider))
+}
+
+@Composable
+private fun ProfileDetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Text(
+            text = value.ifBlank { "Not added" },
+            color = Muted,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+    ProfileDivider()
+}
+
+@Composable
+private fun ProfileAccountRow(
+    icon: ImageVector,
+    label: String,
+    value: String?,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = Orange, modifier = Modifier.size(21.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(label, color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        if (value != null) {
+            Text(
+                text = value,
+                color = Muted,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (onClick != null) {
+            androidx.compose.material3.Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = Muted,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProfileSetupTaskRow(task: FarmTask) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (task.action != null) Modifier.clickable(onClick = task.action) else Modifier)
+            .padding(vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .clip(CircleShape)
+                .background(if (task.done) Orange else Color.Transparent)
+                .border(1.5.dp, if (task.done) Orange else Muted, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (task.done) Text("✓", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(task.title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            if (task.note.isNotBlank()) Text(task.note, color = Muted, fontSize = 12.sp)
+        }
+        if (task.link != null && task.action != null) {
+            Text(task.link, color = Orange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

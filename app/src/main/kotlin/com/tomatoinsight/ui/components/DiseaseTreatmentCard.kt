@@ -44,7 +44,7 @@ fun DiseaseTreatmentCard(
     result: ValidationResponse,
     savedRecommendation: SavedRecommendation? = null
 ) {
-    // Same as the website: every score above 0% gets its own care section.
+    // One care section for the top diagnosis; measured severity selects the plan.
     val withAllGuides = result.ensureGuidesForAllDetections()
     if (withAllGuides.hasAiRecommendations) {
         GroqTreatmentCard(withAllGuides)
@@ -80,6 +80,7 @@ fun DiseaseTreatmentCard(
 @Composable
 private fun SavedRecommendationCard(guide: SavedRecommendation) {
     val isHealthy = isHealthyDisease(guide.diseaseName)
+    val rescanRequired = !isHealthy && !guide.severityAssessable
     val accent = if (guide.isCriticalRemoval) TomatoRed else if (isHealthy) TomatoGreen else TomatoRed
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -94,7 +95,12 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            TreatmentCardHeader(isHealthy = isHealthy, accent = accent, sourceLabel = null)
+            TreatmentCardHeader(
+                isHealthy = isHealthy,
+                accent = accent,
+                sourceLabel = null,
+                rescanRequired = rescanRequired
+            )
             Spacer(modifier = Modifier.height(12.dp))
             if (guide.diseaseName.isNotBlank()) {
                 Text(
@@ -125,7 +131,11 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
             if (guide.actionSteps.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = if (isHealthy) "What to do" else "Treatment steps",
+                    text = when {
+                        rescanRequired -> "How to retake the scan"
+                        isHealthy -> "What to do"
+                        else -> "Treatment steps"
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     color = Color(0xFF2E7D32)
@@ -170,6 +180,7 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
     val isHealthy = isHealthyDisease(primaryName) &&
         sections.none { !isHealthyDisease(it.disease.orEmpty()) && (it.confidencePercent ?: 0) >= 10 }
     val accent = if (isHealthy) TomatoGreen else TomatoRed
+    val rescanRequired = !isHealthy && result.severityAssessable == false
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -191,7 +202,8 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
                     "groq" -> "Powered by Groq"
                     "rules" -> "Built-in care guide"
                     else -> "Care recommendations"
-                }
+                },
+                rescanRequired = rescanRequired
             )
 
             if (!ai.combinedNote.isNullOrBlank()) {
@@ -211,7 +223,11 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
                     HorizontalDivider(color = Color(0xFFE0E0E0))
                     Spacer(modifier = Modifier.height(16.dp))
                 }
-                AiRecommendationSectionBlock(section = section, accent = accent)
+                AiRecommendationSectionBlock(
+                    section = section,
+                    accent = accent,
+                    rescanRequired = rescanRequired
+                )
             }
 
             result.aiDisclaimer?.takeIf { it.isNotBlank() }?.let { disclaimer ->
@@ -230,7 +246,8 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
 @Composable
 private fun AiRecommendationSectionBlock(
     section: AiRecommendationSection,
-    accent: Color
+    accent: Color,
+    rescanRequired: Boolean = false
 ) {
     val disease = section.disease.orEmpty()
     val percent = section.confidencePercent ?: 0
@@ -240,7 +257,7 @@ private fun AiRecommendationSectionBlock(
     Text(
         text = buildString {
             append(disease.ifBlank { "Detected condition" })
-            append(" ($percent%)")
+            append(" · $percent% diagnosis confidence")
         },
         fontWeight = FontWeight.Bold,
         fontSize = 15.sp,
@@ -269,7 +286,11 @@ private fun AiRecommendationSectionBlock(
     if (steps.isNotEmpty()) {
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = if (sectionHealthy) "What to do" else "Treatment steps",
+            text = when {
+                rescanRequired -> "How to retake the scan"
+                sectionHealthy -> "What to do"
+                else -> "Treatment steps"
+            },
             fontWeight = FontWeight.Bold,
             fontSize = 14.sp,
             color = Color(0xFF2E7D32)
@@ -306,6 +327,7 @@ private fun OfflineTreatmentCard(
     if (treatments.isEmpty()) return
     val onlyHealthy = treatments.all { isHealthyDisease(it.diseaseName) }
     val accent = if (onlyHealthy) TomatoGreen else TomatoRed
+    val rescanRequired = !onlyHealthy && result.severityAssessable == false
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -323,7 +345,8 @@ private fun OfflineTreatmentCard(
             TreatmentCardHeader(
                 isHealthy = onlyHealthy,
                 accent = accent,
-                sourceLabel = "Built-in care guide"
+                sourceLabel = "Built-in care guide",
+                rescanRequired = rescanRequired
             )
 
             result.aiRecommendationError?.takeIf { it.isNotBlank() }?.let { error ->
@@ -339,27 +362,6 @@ private fun OfflineTreatmentCard(
                     fontSize = 11.sp,
                     color = Color(0xFF9E9E9E),
                     lineHeight = 15.sp
-                )
-            }
-
-            if (treatments.size > 1) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "Care steps for every detection: " +
-                        treatments.joinToString(" · ") { guide ->
-                            val score = result.allDiseaseScores
-                                .firstOrNull { it.name.equals(guide.diseaseName, ignoreCase = true) }
-                                ?.percent
-                            if (score != null && score > 0) {
-                                "${guide.diseaseName} ($score%)"
-                            } else {
-                                guide.diseaseName
-                            }
-                        },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF37474F),
-                    lineHeight = 18.sp
                 )
             }
 
@@ -382,7 +384,7 @@ private fun OfflineTreatmentCard(
                 Text(
                     text = buildString {
                         append(treatment.diseaseName)
-                        if (score > 0) append(" ($score%)")
+                        if (score > 0) append(" · $score% diagnosis confidence")
                     },
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
@@ -405,7 +407,11 @@ private fun OfflineTreatmentCard(
 
                 Spacer(modifier = Modifier.height(14.dp))
                 Text(
-                    text = if (sectionHealthy) "What to do" else "Treatment steps",
+                    text = when {
+                        rescanRequired -> "How to retake the scan"
+                        sectionHealthy -> "What to do"
+                        else -> "Treatment steps"
+                    },
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     color = Color(0xFF2E7D32)
@@ -447,7 +453,8 @@ private fun OfflineTreatmentCard(
 private fun TreatmentCardHeader(
     isHealthy: Boolean,
     accent: Color,
-    sourceLabel: String?
+    sourceLabel: String?,
+    rescanRequired: Boolean = false
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -466,7 +473,11 @@ private fun TreatmentCardHeader(
         Spacer(modifier = Modifier.width(10.dp))
         Column {
             Text(
-                text = if (isHealthy) "CARE TIPS" else "TREATMENT RECOMMENDATIONS",
+                text = when {
+                    rescanRequired -> "CLEARER SCAN NEEDED"
+                    isHealthy -> "CARE TIPS"
+                    else -> "TREATMENT RECOMMENDATIONS"
+                },
                 color = accent,
                 fontWeight = FontWeight.Bold,
                 fontSize = 16.sp

@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
 import com.tomatoinsight.R
+import com.tomatoinsight.data.PendingSignup
+import com.tomatoinsight.data.PendingSignupStore
 import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoRed
 import kotlinx.coroutines.delay
@@ -47,12 +49,36 @@ private const val SPLASH_HOLD_MS = 1_800L
 private val SplashBackground = Color(0xFFFFF8F5)
 
 /** Route after the splash screen for the current auth and onboarding state. */
-fun appRouteAfterSplash(auth: FirebaseAuth, context: Context): String =
-    when {
-        auth.currentUser != null -> "dashboard"
+fun appRouteAfterSplash(auth: FirebaseAuth, context: Context): String {
+    if (PendingSignupStore.hasPending(context)) return "verify"
+
+    val user = auth.currentUser
+    if (user != null && !user.isEmailVerified) {
+        val email = user.email.orEmpty()
+        if (email.isNotBlank()) {
+            val existing = PendingSignupStore.read(context)
+            PendingSignupStore.save(
+                context,
+                PendingSignup(
+                    email = email,
+                    password = existing?.password.orEmpty(),
+                    status = PendingSignup.STATUS_AWAITING_VERIFICATION,
+                    firstName = existing?.firstName.orEmpty(),
+                    middleName = existing?.middleName.orEmpty(),
+                    lastName = existing?.lastName.orEmpty()
+                )
+            )
+        }
+        auth.signOut()
+        return if (PendingSignupStore.hasPending(context)) "verify" else "login"
+    }
+
+    return when {
+        user != null -> "dashboard"
         !hasSeenOnboarding(context) -> "onboarding"
         else -> "login"
     }
+}
 
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {

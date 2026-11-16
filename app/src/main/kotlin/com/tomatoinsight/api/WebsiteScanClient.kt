@@ -53,8 +53,7 @@ object WebsiteScanClient {
             minConfidence = LEAF_MIN_CONFIDENCE,
             stage = "website",
             message = "Tomato leaf detected.",
-            predictions = diseasePredictionsFrom(payload, imageBytes),
-            recommendation = recommendationFrom(payload)
+            predictions = diseasePredictionsFrom(payload, imageBytes)
         )
     }
 
@@ -70,7 +69,12 @@ object WebsiteScanClient {
         }
         val parsed = gson.fromJson(payload, ValidationResponse::class.java)
         val minConfidence = parsed.minConfidence ?: LEAF_MIN_CONFIDENCE
-        return parsed.copy(minConfidence = minConfidence).ensureGuidesForAllDetections()
+        return parsed.copy(
+            minConfidence = minConfidence,
+            aiRecommendations = null,
+            recommendationSource = null,
+            groqModel = null
+        )
     }
 
     private suspend fun diseasePredictionsFrom(
@@ -86,26 +90,13 @@ object WebsiteScanClient {
         }.getOrDefault(emptyList())
     }
 
-    private suspend fun recommendationFrom(payload: JsonObject): CareResult? {
-        payload.getAsJsonObject("ai_recommendations")?.let {
-            return CareResult(
-                recommendations = gson.fromJson(it, AiRecommendations::class.java),
-                source = payload.text("recommendation_source"),
-                model = payload.text("groq_model"),
-                error = payload.text("ai_recommendation_error")
-            )
-        }
-        return null
-    }
-
     private suspend fun tomatoResponse(
         leafName: String?,
         leafConfidence: Double,
         minConfidence: Double,
         stage: String,
         message: String,
-        predictions: List<DiseasePrediction>,
-        recommendation: CareResult?
+        predictions: List<DiseasePrediction>
     ): ValidationResponse {
         val scores = barScores(predictions.map { (it.displayName ?: "") to (it.confidence ?: 0.0) })
         val mapped = if (predictions.isNotEmpty()) {
@@ -119,7 +110,6 @@ object WebsiteScanClient {
             }
         }
         val top = mapped.maxByOrNull { it.confidence ?: 0.0 }
-        val care = recommendation ?: runCatching { requestRecommendation(scores) }.getOrNull()
         return ValidationResponse(
             result = "TomatoLeaf",
             confidence = leafConfidence,
@@ -130,12 +120,8 @@ object WebsiteScanClient {
             predictions = mapped,
             topDisease = top?.displayName,
             topDiseaseConfidence = top?.confidence,
-            diseaseClasses = DISEASE_DISPLAY_ORDER,
-            aiRecommendations = care?.recommendations,
-            aiRecommendationError = care?.error,
-            recommendationSource = care?.source,
-            groqModel = care?.model
-        ).ensureGuidesForAllDetections()
+            diseaseClasses = DISEASE_DISPLAY_ORDER
+        )
     }
 
     private suspend fun postFile(
@@ -177,20 +163,17 @@ object WebsiteScanClient {
                 DiseasePrediction(className = name, confidence = refinedScores.getValue(name) / 100.0)
             }
             val top = predictions.maxByOrNull { it.confidence ?: 0.0 }
-            val care = requestRecommendation(
-                refinedScores.mapKeys { (name, _) -> barKey(name) }
-            )
             response.copy(
                 predictions = predictions,
                 topDisease = top?.displayName,
                 topDiseaseConfidence = top?.confidence,
                 diseaseClasses = DISEASE_DISPLAY_ORDER,
-                aiRecommendations = care.recommendations,
-                aiRecommendationError = care.error,
-                recommendationSource = care.source,
-                groqModel = care.model,
+                aiRecommendations = null,
+                aiRecommendationError = null,
+                recommendationSource = null,
+                groqModel = null,
                 message = "Early Blight and Spotted Wilt were checked by the specialist model."
-            ).ensureGuidesForAllDetections()
+            )
         }.getOrElse { response }
     }
 
@@ -209,10 +192,10 @@ object WebsiteScanClient {
                 affectedAreaPct = null,
                 severityAssessable = false,
                 severityReason = "no_top_disease"
-            )
+            ).ensureGuidesForAllDetections()
         val barKey = barKeyOrNull(top.name) ?: "early_blight"
         if (isHealthyDisease(top.name) || barKey == "healthy") {
-            return runCatching { mergeSeverity(response, postSeverity(imageBytes, "healthy")) }
+            val withSeverity = runCatching { mergeSeverity(response, postSeverity(imageBytes, "healthy")) }
                 .getOrElse {
                     response.copy(
                         severityLabel = "Healthy",
@@ -221,8 +204,9 @@ object WebsiteScanClient {
                         severityReason = "classified_healthy_local_fallback"
                     )
                 }
+            return withSeverityDrivenRecommendation(withSeverity)
         }
-        return runCatching { mergeSeverity(response, postSeverity(imageBytes, barKey)) }
+        val withSeverity = runCatching { mergeSeverity(response, postSeverity(imageBytes, barKey)) }
             .getOrElse {
                 response.copy(
                     severityLabel = "Unable to Assess",
@@ -231,6 +215,46 @@ object WebsiteScanClient {
                     severityReason = "severity_request_failed"
                 )
             }
+        return withSeverityDrivenRecommendation(withSeverity)
+    }
+
+    /** Generates one care plan after severity is known, using only the top diagnosis score. */
+    suspend fun withSeverityDrivenRecommendation(response: ValidationResponse): ValidationResponse {
+        if (!response.confirmsTomatoLeaf()) return response
+        val top = response.allDiseaseScores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 }
+            ?: return response
+        val severity = diseaseSeverityLabel(top.name, response.affectedAreaPct, response.severityLabel)
+        val assessable = isHealthyDisease(top.name) ||
+            (response.severityAssessable == true && severity != "Unable to Assess")
+        if (!assessable) {
+            return response.copy(
+                aiRecommendations = null,
+                aiRecommendationError = null,
+                recommendationSource = "rules",
+                groqModel = null
+            ).ensureGuidesForAllDetections()
+        }
+
+        val topKey = barKeyOrNull(top.name) ?: return response.ensureGuidesForAllDetections()
+        val topOnlyScores = linkedMapOf(
+            "healthy" to 0.0,
+            "tlcv" to 0.0,
+            "early_blight" to 0.0,
+            "spotted_wilt" to 0.0
+        ).apply { this[topKey] = top.percent.toDouble() }
+        val care = runCatching {
+            requestRecommendation(
+                scores = topOnlyScores,
+                severityPct = response.affectedAreaPct,
+                severityLabel = severity
+            )
+        }.getOrElse { CareResult(error = it.message) }
+        return response.copy(
+            aiRecommendations = care.recommendations,
+            aiRecommendationError = care.error,
+            recommendationSource = care.source ?: "rules",
+            groqModel = care.model
+        ).ensureGuidesForAllDetections()
     }
 
     private data class SeverityFields(
@@ -308,7 +332,7 @@ object WebsiteScanClient {
         if (guideObjects.isEmpty()) {
             return CareResult(error = payload.text("message") ?: "No care recommendation was returned.")
         }
-        val sections = guideObjects.mapIndexed { index, guide ->
+        val sections = guideObjects.take(1).mapIndexed { index, guide ->
             val matchPct = detected
                 ?.takeIf { index in 0 until it.size() }
                 ?.get(index)
@@ -327,15 +351,7 @@ object WebsiteScanClient {
             )
         }
         val primary = sections.first()
-        val combined = if (sections.size > 1) {
-            "Care steps for every detection: " + sections.joinToString(" · ") { section ->
-                val name = section.disease.orEmpty().ifBlank { "Condition" }
-                val pct = section.confidencePercent
-                if (pct != null && pct > 0) "$name ($pct%)" else name
-            }
-        } else {
-            primary.summary
-        }
+        val combined = primary.summary
         val groqUsed = payload.bool("groq_used") == true
         return CareResult(
             recommendations = AiRecommendations(

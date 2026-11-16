@@ -14,30 +14,28 @@ data class DiseaseTreatment(
     val urgencyNote: String,
     val summary: String,
     val actionSteps: List<String>,
-    val preventionTips: List<String> = emptyList()
+    val preventionTips: List<String> = emptyList(),
+    val isCriticalRemoval: Boolean = false
 )
 
-/** Built-in care text for every score above 0%, highest first. */
+/** One built-in care plan for the top diagnosis only. Class confidence never selects severity. */
 fun treatmentsForDetectedScores(
     scores: List<DiseaseScore>,
     severityLabel: String? = null,
     affectedAreaPct: Double? = null
-): List<DiseaseTreatment> =
-    scores
-        .filter { it.percent > 0 }
-        .sortedByDescending { it.percent }
-        .mapIndexed { index, score ->
-            treatmentForTopDisease(
-                diseaseName = score.name,
-                confidencePercent = score.percent,
-                severityLabel = if (index == 0) severityLabel else null,
-                affectedAreaPct = if (index == 0) affectedAreaPct else null
-            )
-        }
+): List<DiseaseTreatment> {
+    val top = scores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 } ?: return emptyList()
+    return listOf(
+        treatmentForTopDisease(
+            diseaseName = top.name,
+            severityLabel = severityLabel,
+            affectedAreaPct = affectedAreaPct
+        )
+    )
+}
 
 fun treatmentForTopDisease(
     diseaseName: String,
-    confidencePercent: Int,
     severityLabel: String? = null,
     affectedAreaPct: Double? = null
 ): DiseaseTreatment {
@@ -48,6 +46,19 @@ fun treatmentForTopDisease(
     )
     val key = normalizeDiseaseKey(diseaseName)
     val extentPct = affectedAreaPct?.let { kotlin.math.round(it).toInt().coerceIn(0, 100) }
+
+    if (severity == "Unable to Assess" && !isHealthyDisease(diseaseName)) {
+        return DiseaseTreatment(
+            diseaseName = diseaseName,
+            urgencyNote = "A clearer scan is needed before a care plan can be selected.",
+            summary = "The disease classifier identified the most likely condition, but the affected leaf area could not be measured reliably. Do not start treatment from this image alone.",
+            actionSteps = listOf(
+                "Place one tomato leaf against a plain, evenly lit background.",
+                "Keep the full leaf visible and remove hands, soil, other leaves, and shadows from the frame.",
+                "Hold the camera steady, focus on the leaf, and scan again."
+            )
+        )
+    }
 
     val base = when {
         key.contains("earlyblight") || key == "eb" -> earlyBlightTreatment()
@@ -64,8 +75,6 @@ fun treatmentForTopDisease(
     val urgency = when {
         isHealthyDisease(diseaseName) && severity != "Unable to Assess" ->
             "Keep up regular monitoring to catch problems early."
-        severity == "Unable to Assess" ->
-            "Severity could not be measured from this image. Confirm symptoms on the plant before treating; follow disease-specific steps cautiously."
         critical ->
             "Critical (severity 100%): remove this leaf immediately and destroy it away from the farm. Do not compost."
         severity == "Severe" ->
@@ -77,18 +86,31 @@ fun treatmentForTopDisease(
         else ->
             "Confirm symptoms on the plant before treating."
     }
-    val steps = if (critical) {
-        listOf(
-            "Remove this leaf immediately; bag it and dispose of it away from healthy plants (do not compost)."
+    val steps = when {
+        critical -> listOf(
+            "Isolate the plant immediately.",
+            "Remove this leaf now; bag it and dispose of it away from healthy plants. Do not compost it."
         ) + base.actionSteps
-    } else {
-        base.actionSteps
+        severity == "Severe" -> listOf(
+            "Isolate the affected plant from healthy plants today.",
+            "Remove heavily affected leaves with sanitized tools and dispose of them away from the farm."
+        ) + base.actionSteps
+        severity == "Moderate" -> listOf(
+            "Mark the affected plant and inspect nearby plants for the same symptoms.",
+            "Remove clearly affected leaves with sanitized tools before applying disease-specific controls."
+        ) + base.actionSteps.take(4)
+        severity == "Mild" -> listOf(
+            "Mark the affected leaf and rescan it in 48 hours to check whether the affected area is increasing.",
+            "Improve airflow and keep the foliage dry while monitoring nearby leaves."
+        ) + base.actionSteps.take(3)
+        else -> base.actionSteps
     }
 
     return base.copy(
         diseaseName = diseaseName,
         urgencyNote = urgency,
-        actionSteps = steps
+        actionSteps = steps.distinct(),
+        isCriticalRemoval = critical
     )
 }
 
@@ -175,6 +197,8 @@ private fun genericDiseaseTreatment(name: String) = DiseaseTreatment(
 data class SavedGuide(
     val diseaseName: String = "",
     val confidencePercent: Int = 0,
+    val severityLabel: String = "",
+    val affectedAreaPct: Double? = null,
     val urgencyNote: String = "",
     val summary: String = "",
     val actionSteps: List<String> = emptyList(),
@@ -185,6 +209,11 @@ data class SavedGuide(
 /** Care text stored on users/{uid}.plantNames.{tile}.recommendation. */
 data class SavedRecommendation(
     val diseaseName: String = "",
+    val diagnosisConfidencePercent: Int = 0,
+    val severityLabel: String = "",
+    val affectedAreaPct: Double? = null,
+    val severityAssessable: Boolean = false,
+    val cacheKey: String = "",
     val urgencyNote: String = "",
     val summary: String = "",
     val actionSteps: List<String> = emptyList(),
@@ -212,6 +241,13 @@ data class SavedRecommendation(
         }
         if (topBarKey.isNotBlank()) record["topBarKey"] = topBarKey
         if (topPct != null && topPct > 0.0) record["topPct"] = topPct
+        if (diagnosisConfidencePercent > 0) record["diagnosisConfidencePercent"] = diagnosisConfidencePercent
+        if (severityLabel.isNotBlank()) record["severityLabel"] = severityLabel
+        if (affectedAreaPct != null && affectedAreaPct.isFinite()) {
+            record["affectedAreaPct"] = affectedAreaPct.coerceIn(0.0, 100.0)
+        }
+        record["severityAssessable"] = severityAssessable
+        if (cacheKey.isNotBlank()) record["cacheKey"] = cacheKey
         if (weekNumber != null) record["weekNumber"] = weekNumber
         if (preventionTips.isNotEmpty()) record["preventionTips"] = preventionTips.take(8)
         if (source == "groq" || source == "rules") record["source"] = source
@@ -222,24 +258,26 @@ data class SavedRecommendation(
                 linkedMapOf<String, Any>(
                     "diseaseName" to guide.diseaseName.take(80),
                     "confidencePercent" to guide.confidencePercent.coerceIn(0, 100),
+                    "severityLabel" to guide.severityLabel.take(40),
                     "urgencyNote" to guide.urgencyNote.take(400),
                     "summary" to guide.summary.take(800),
                     "actionSteps" to guide.actionSteps.take(12),
                     "preventionTips" to guide.preventionTips.take(8),
                     "isCriticalRemoval" to guide.isCriticalRemoval
-                )
+                ).apply {
+                    if (guide.affectedAreaPct != null && guide.affectedAreaPct.isFinite()) {
+                        this["affectedAreaPct"] = guide.affectedAreaPct.coerceIn(0.0, 100.0)
+                    }
+                }
             }
         }
         return record
     }
 }
 
-/**
- * Same rule as the website: every classification bar above 0% gets its own care guide.
- * Keeps Groq/server wording when present; fills missing detections with built-in rules.
- */
+/** Keeps exactly one care section for the top diagnosis and the measured severity. */
 fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
-    val detected = allDiseaseScores
+    val top = allDiseaseScores
         .filter { it.percent > 0 }
         .sortedWith(
             compareByDescending<DiseaseScore> { it.percent }
@@ -249,7 +287,7 @@ fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
                     }.let { if (it < 0) Int.MAX_VALUE else it }
                 }
         )
-    if (detected.isEmpty()) return this
+        .firstOrNull() ?: return this
 
     fun sectionMatches(section: AiRecommendationSection, score: DiseaseScore): Boolean {
         val a = normalizeDiseaseKey(section.disease.orEmpty())
@@ -258,37 +296,27 @@ fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
         return a == b || a.contains(b) || b.contains(a)
     }
 
-    val existing = aiRecommendations?.sections.orEmpty()
-    val sections = detected.mapIndexed { index, score ->
-        val fromServer = existing.firstOrNull { sectionMatches(it, score) }
-        if (fromServer != null) {
-            fromServer.copy(
-                disease = fromServer.disease?.ifBlank { score.name } ?: score.name,
-                confidencePercent = score.percent
-            )
-        } else {
-            treatmentForTopDisease(
-                diseaseName = score.name,
-                confidencePercent = score.percent,
-                severityLabel = if (index == 0) severityLabel else null,
-                affectedAreaPct = if (index == 0) affectedAreaPct else null
-            ).toAiSection(score.percent)
-        }
-    }
-    val combined = if (sections.size > 1) {
-        "Care steps for every detection: " + sections.joinToString(" · ") { section ->
-            val name = section.disease.orEmpty().ifBlank { "Condition" }
-            val pct = section.confidencePercent
-            if (pct != null && pct > 0) "$name ($pct%)" else name
-        }
+    val severity = diseaseSeverityLabel(top.name, affectedAreaPct, severityLabel)
+    val mustUseRescanGuide = !isHealthyDisease(top.name) &&
+        (severityAssessable == false || severity == "Unable to Assess")
+    val fromServer = aiRecommendations?.sections.orEmpty().firstOrNull { sectionMatches(it, top) }
+    val section = if (fromServer != null && !mustUseRescanGuide) {
+        fromServer.copy(
+            disease = fromServer.disease?.ifBlank { top.name } ?: top.name,
+            confidencePercent = top.percent
+        )
     } else {
-        sections.firstOrNull()?.summary ?: aiRecommendations?.combinedNote
+        treatmentForTopDisease(
+            diseaseName = top.name,
+            severityLabel = severity,
+            affectedAreaPct = affectedAreaPct
+        ).toAiSection(top.percent)
     }
     return copy(
         aiRecommendations = AiRecommendations(
-            primaryDisease = sections.firstOrNull()?.disease ?: aiRecommendations?.primaryDisease,
-            combinedNote = combined,
-            sections = sections
+            primaryDisease = section.disease ?: top.name,
+            combinedNote = section.summary,
+            sections = listOf(section)
         ),
         recommendationSource = recommendationSource ?: "rules"
     )
@@ -302,7 +330,7 @@ private fun DiseaseTreatment.toAiSection(percent: Int): AiRecommendationSection 
         summary = summary,
         steps = actionSteps,
         prevention = preventionTips,
-        isCriticalRemoval = !isHealthyDisease(diseaseName) && percent >= 100
+        isCriticalRemoval = isCriticalRemoval
     )
 
 fun List<DiseaseScore>.recommendationScoresKey(): String =
@@ -310,6 +338,23 @@ fun List<DiseaseScore>.recommendationScoresKey(): String =
         val percent = firstOrNull { barKeyForDiseaseName(it.name) == key }?.percent ?: 0
         "$key:$percent"
     }
+
+fun ValidationResponse.recommendationCacheKey(): String {
+    val top = allDiseaseScores.maxByOrNull { it.percent }
+    val topKey = top?.name?.let(::normalizeDiseaseKey).orEmpty()
+    val area = affectedAreaPct
+        ?.takeIf { it.isFinite() }
+        ?.let { kotlin.math.round(it.coerceIn(0.0, 100.0) * 10.0) / 10.0 }
+        ?.toString()
+        ?: "na"
+    return listOf(
+        topKey,
+        (top?.percent ?: 0).toString(),
+        severityLabel.orEmpty().lowercase(),
+        area,
+        (severityAssessable == true).toString()
+    ).joinToString("|")
+}
 
 /** Care guide returned by the server for this scan, in the shape stored on plantNames. */
 fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
@@ -327,10 +372,12 @@ fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
                 normalizeDiseaseKey(disease) == normalizeDiseaseKey(top.name)
             )
     } ?: sections.first()
-    val guides = sections.map { item ->
+    val guides = listOf(section).map { item ->
         SavedGuide(
             diseaseName = item.disease?.trim().orEmpty().ifBlank { top.name },
             confidencePercent = item.confidencePercent ?: 0,
+            severityLabel = filled.severityLabel.orEmpty(),
+            affectedAreaPct = filled.affectedAreaPct,
             urgencyNote = item.urgency?.trim().orEmpty(),
             summary = item.summary?.trim().orEmpty(),
             actionSteps = item.steps.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.take(12),
@@ -341,22 +388,17 @@ fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
     }
     val critical = section.isCriticalRemoval
         ?: (!isHealthyDisease(top.name) && top.percent >= 100)
-    val summary = when {
-        sections.size > 1 -> {
-            filled.aiRecommendations?.combinedNote?.trim()?.ifBlank { null }
-                ?: sections.joinToString(" · ") { item ->
-                    val label = item.disease?.trim().orEmpty().ifBlank { "Condition" }
-                    val pct = item.confidencePercent?.takeIf { it > 0 }?.let { " ($it%)" }.orEmpty()
-                    "$label$pct"
-                }
-        }
-        else -> listOfNotNull(
-            filled.aiRecommendations?.combinedNote?.trim()?.ifBlank { null },
-            section.summary?.trim()
-        ).distinct().joinToString("\n\n")
-    }
+    val summary = listOfNotNull(
+        filled.aiRecommendations?.combinedNote?.trim()?.ifBlank { null },
+        section.summary?.trim()
+    ).distinct().joinToString("\n\n")
     return SavedRecommendation(
         diseaseName = section.disease?.trim().orEmpty().ifBlank { top.name },
+        diagnosisConfidencePercent = top.percent,
+        severityLabel = filled.severityLabel.orEmpty(),
+        affectedAreaPct = filled.affectedAreaPct,
+        severityAssessable = filled.severityAssessable == true,
+        cacheKey = filled.recommendationCacheKey(),
         urgencyNote = section.urgency?.trim().orEmpty(),
         summary = summary,
         actionSteps = section.steps.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.take(12),
@@ -366,10 +408,10 @@ fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
     )
 }
 
-/** Rebuild multi-detection AI sections from a saved website-style recommendation. */
+/** Rebuild the single top-diagnosis section from a saved recommendation. */
 fun SavedRecommendation.asAiRecommendations(): AiRecommendations? {
     val sections = when {
-        guides.isNotEmpty() -> guides.map { guide ->
+        guides.isNotEmpty() -> guides.take(1).map { guide ->
             AiRecommendationSection(
                 disease = guide.diseaseName,
                 confidencePercent = guide.confidencePercent,
@@ -383,7 +425,7 @@ fun SavedRecommendation.asAiRecommendations(): AiRecommendations? {
         summary.isNotBlank() || actionSteps.isNotEmpty() -> listOf(
             AiRecommendationSection(
                 disease = diseaseName,
-                confidencePercent = null,
+                confidencePercent = diagnosisConfidencePercent.takeIf { it > 0 },
                 urgency = urgencyNote,
                 summary = summary,
                 steps = actionSteps,
@@ -396,15 +438,7 @@ fun SavedRecommendation.asAiRecommendations(): AiRecommendations? {
     if (sections.isEmpty()) return null
     return AiRecommendations(
         primaryDisease = sections.first().disease ?: diseaseName,
-        combinedNote = if (sections.size > 1) {
-            "Care steps for every detection: " + sections.joinToString(" · ") { section ->
-                val name = section.disease.orEmpty().ifBlank { "Condition" }
-                val pct = section.confidencePercent
-                if (pct != null && pct > 0) "$name ($pct%)" else name
-            }
-        } else {
-            summary.ifBlank { sections.first().summary }
-        },
-        sections = sections
+        combinedNote = summary.ifBlank { sections.first().summary },
+        sections = listOf(sections.first())
     )
 }

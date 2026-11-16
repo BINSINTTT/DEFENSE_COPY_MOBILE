@@ -64,12 +64,6 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
         result?.severityAssessable == true -> result.affectedAreaPct
         else -> result?.affectedAreaPct
     }
-    val affectedAreaText = when {
-        leading == null -> "—"
-        isHealthy -> formatAreaPct(affectedAreaPct ?: 0.0)
-        affectedAreaPct != null && result?.severityAssessable == true -> formatAreaPct(affectedAreaPct)
-        else -> "—"
-    }
     val severity = when {
         leading == null -> "—"
         else -> diseaseSeverityLabel(
@@ -120,11 +114,6 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
                 MetricCard(
                     label = "AI Confidence",
                     value = if (confidence != null) "$confidence%" else "—",
-                    modifier = Modifier.weight(1f)
-                )
-                MetricCard(
-                    label = "Estimated affected leaf area",
-                    value = affectedAreaText,
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
@@ -233,15 +222,6 @@ private fun DiseaseProgressRow(
             color = TitleInk,
             modifier = Modifier.width(40.dp)
         )
-    }
-}
-
-private fun formatAreaPct(value: Double): String {
-    val rounded = kotlin.math.round(value * 10.0) / 10.0
-    return if (rounded == rounded.toLong().toDouble()) {
-        "${rounded.toLong()}%"
-    } else {
-        "$rounded%"
     }
 }
 

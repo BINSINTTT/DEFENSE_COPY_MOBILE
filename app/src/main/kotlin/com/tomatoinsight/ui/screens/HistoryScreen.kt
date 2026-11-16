@@ -7,9 +7,12 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,12 +28,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Eco
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -41,10 +46,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
-import com.tomatoinsight.api.ImageUploadHelper
 import com.tomatoinsight.api.ValidationResponse
+import com.tomatoinsight.api.WebsiteScanClient
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import androidx.compose.material3.Surface
@@ -59,15 +65,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.tomatoinsight.api.diseaseDisplayLabel
+import com.tomatoinsight.api.isHealthyDisease
 import com.tomatoinsight.data.FIRST_FARM_WEEK
 import com.tomatoinsight.data.FarmDeletion
 import com.tomatoinsight.data.LAST_FARM_WEEK
@@ -77,24 +85,29 @@ import com.tomatoinsight.data.TileScanHistory
 import com.tomatoinsight.data.TileScanResult
 import com.tomatoinsight.data.asSavedValidationResponse
 import com.tomatoinsight.data.ensureGuidesForAllDetections
+import com.tomatoinsight.data.recommendationCacheKey
 import com.tomatoinsight.ui.components.ConnectionStatusIndicator
 import com.tomatoinsight.ui.components.CustomBottomBar
 import com.tomatoinsight.ui.components.InternetConnectionNotice
 import com.tomatoinsight.ui.components.DiseaseTreatmentCard
 import com.tomatoinsight.ui.components.HealthStatusCard
+import java.text.SimpleDateFormat
+import java.io.ByteArrayOutputStream
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
-private val PageBackground = Color(0xFFF4F6F8)
-private val Ink = Color(0xFF222222)
-private val Muted = Color(0xFF757575)
-private val CardBorder = Color(0xFF14213D).copy(alpha = 0.08f)
-private val CardBorderStrong = Color(0xFF14213D).copy(alpha = 0.12f)
-private val RecordsHeadBg = Color(0xFFFAFAFA)
-private val RowDivider = Color(0xFF14213D).copy(alpha = 0.06f)
-private val TomatoShell = Color(0xFF9B2B26)
+private val PageBackground = Color(0xFFFFFCF9)
+private val Ink = Color(0xFF202421)
+private val Muted = Color(0xFF656B67)
+private val SummaryBackground = Color(0xFFF1F3EC)
+private val Divider = Color(0xFF202421).copy(alpha = 0.10f)
+private val ForestGreen = Color(0xFF1F7A35)
+private val SoftGreen = Color(0xFFE8F2E5)
 private val StatusOkBg = Color(0xFFE8F5E9)
 private val StatusOkFg = Color(0xFF1B5E20)
-private val StatusIssueBg = Color(0xFFFFEBEE)
-private val StatusIssueFg = Color(0xFFB71C1C)
+private val StatusIssueBg = Color(0xFFFFE8E3)
+private val StatusIssueFg = Color(0xFFD94335)
 private val StatusSavedBg = Color(0xFFECEFF1)
 private val StatusSavedFg = Color(0xFF546E7A)
 private val StatusDeletedBg = Color(0xFFFBE9E7)
@@ -127,6 +140,12 @@ fun HistoryScreen(
     var filterMenu by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf(HistoryFilter.All) }
     var openScan by remember { mutableStateOf<TileScanResult?>(null) }
+    var showScanTip by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        delay(180)
+        showScanTip = true
+    }
 
     val week = selectedFarmWeek.coerceIn(FIRST_FARM_WEEK, LAST_FARM_WEEK)
     val savedTiles = tileScanHistory.filterValues { it.isNotEmpty() }
@@ -152,7 +171,7 @@ fun HistoryScreen(
         bottomBar = {
             CustomBottomBar(
                 selectedTab = "history",
-                cameraEnabled = false,
+                cameraEnabled = true,
                 onHomeClick = onNavigateToHome,
                 onMonitoringClick = onNavigateToMonitoring,
                 onCameraClick = onCameraClick,
@@ -165,8 +184,7 @@ fun HistoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 12.dp)
+                .padding(horizontal = 18.dp)
         ) {
             InternetConnectionNotice(
                 modifier = Modifier.padding(top = 8.dp)
@@ -182,143 +200,133 @@ fun HistoryScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.End,
+                    .padding(top = 20.dp, bottom = 22.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ConnectionStatusIndicator()
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "History",
+                        fontSize = 32.sp,
+                        lineHeight = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = (-0.6).sp,
+                        color = Ink
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Your recent plant scans",
+                        fontSize = 15.sp,
+                        color = Muted
+                    )
+                }
+                ConnectionStatusIndicator(
+                    labelColor = Ink,
+                    dotSize = 9.dp
+                )
             }
 
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            HistorySummaryBand(
+                alerts = notificationCount,
+                scans = savedTiles.size,
+                deleted = deletions.size
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+            AnimatedVisibility(
+                visible = showScanTip,
+                enter = fadeIn(tween(320)) +
+                    slideInHorizontally(tween(460, easing = FastOutSlowInEasing)) { it / 3 }
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HistorySummaryStatCard(label = "Notifications", value = notificationCount)
-                    HistorySummaryStatCard(label = "Scanned tiles", value = savedTiles.size)
-                    HistorySummaryStatCard(label = "Deleted plants", value = deletions.size)
-                }
+                SingleLeafScanReminder()
+            }
 
-                Card(
-                    modifier = Modifier.fillMaxWidth().weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    border = BorderStroke(1.dp, CardBorder),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-                ) {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(RecordsHeadBg)
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Records",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 15.sp,
-                                color = Ink,
-                                modifier = Modifier.weight(1f)
-                            )
-                            HistoryMenu(
-                                label = "Week $week",
-                                expanded = weekMenu,
-                                onExpand = { weekMenu = true },
-                                onDismiss = { weekMenu = false }
-                            ) {
-                                (FIRST_FARM_WEEK..LAST_FARM_WEEK).forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text("Week $option") },
-                                        onClick = {
-                                            weekMenu = false
-                                            if (option != week) onWeekSelected(option)
-                                        }
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            HistoryMenu(
-                                label = filter.label,
-                                expanded = filterMenu,
-                                onExpand = { filterMenu = true },
-                                onDismiss = { filterMenu = false }
-                            ) {
-                                HistoryFilter.entries.forEach { option ->
-                                    DropdownMenuItem(
-                                        text = { Text(option.label) },
-                                        onClick = {
-                                            filter = option
-                                            filterMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(CardBorder)
-                        )
+            Spacer(modifier = Modifier.height(22.dp))
 
-                        if (visibleScans.isEmpty() && (!showDeleted || deletions.isEmpty())) {
-                            Text(
-                                text = when {
-                                    filter == HistoryFilter.Deleted -> "No plants have been deleted yet."
-                                    weekRows.isEmpty() ->
-                                        "No scans saved for Week $week yet. Open a tile on Home, run a scan, and tap Save Info."
-                                    else -> "No scans match this filter for the selected week."
-                                },
-                                fontSize = 14.sp,
-                                color = Muted,
-                                lineHeight = 21.sp,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp)
-                            )
-                        } else {
-                            val tableScroll = rememberScrollState()
-                            val tableWidth = HistoryTableColumns.total
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .horizontalScroll(tableScroll)
-                            ) {
-                                LazyColumn(modifier = Modifier.width(tableWidth)) {
-                                    item { HistoryTableHeaderRow() }
-                                    items(
-                                        visibleScans,
-                                        key = { (_, scan) ->
-                                            "scan-${scan.tileNumber}-${scan.weekNumber}-${scan.scanId}"
-                                        }
-                                    ) { (tile, scan) ->
-                                        HistoryTableRow(
-                                            tileLabel = "#$tile",
-                                            plantName = plantNames[tile]?.ifBlank { null } ?: "Tile $tile",
-                                            whenLabel = scan.formattedDate,
-                                            result = diseaseDisplayLabel(scan.diseaseName),
-                                            status = scan.historyStatus(),
-                                            score = "${scan.percent}%",
-                                            onView = { openScan = scan }
-                                        )
-                                    }
-                                    if (showDeleted) {
-                                        items(deletions, key = { "deleted-${it.id}" }) { entry ->
-                                            HistoryTableRow(
-                                                tileLabel = "#${entry.tileNumber}",
-                                                plantName = entry.plantName,
-                                                whenLabel = entry.deletedAtLabel,
-                                                result = "Removed",
-                                                status = HistoryStatus.Deleted,
-                                                score = "—",
-                                                onView = null
-                                            )
-                                        }
-                                    }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Recent activity",
+                    modifier = Modifier.weight(1f),
+                    color = Ink,
+                    fontSize = 20.sp,
+                    lineHeight = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.2).sp
+                )
+                Box {
+                    HistoryFilterChip(
+                        label = "This week",
+                        selected = true,
+                        onClick = { weekMenu = true }
+                    )
+                    DropdownMenu(expanded = weekMenu, onDismissRequest = { weekMenu = false }) {
+                        (FIRST_FARM_WEEK..LAST_FARM_WEEK).forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text("Week $option") },
+                                onClick = {
+                                    weekMenu = false
+                                    if (option != week) onWeekSelected(option)
                                 }
-                            }
+                            )
                         }
                     }
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                Box {
+                    HistoryFilterChip(
+                        label = filter.label,
+                        selected = false,
+                        onClick = { filterMenu = true }
+                    )
+                    DropdownMenu(expanded = filterMenu, onDismissRequest = { filterMenu = false }) {
+                        HistoryFilter.entries.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.label) },
+                                onClick = {
+                                    filter = option
+                                    filterMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val hasVisibleRows = visibleScans.isNotEmpty() || (showDeleted && deletions.isNotEmpty())
+            if (hasVisibleRows) {
+                LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                    items(
+                        visibleScans,
+                        key = { (_, scan) -> "scan-${scan.tileNumber}-${scan.weekNumber}-${scan.scanId}" }
+                    ) { (tile, scan) ->
+                        HistoryScanRow(
+                            scan = scan,
+                            plantName = plantNames[tile]?.ifBlank { null } ?: "Tile $tile",
+                            onClick = { openScan = scan }
+                        )
+                    }
+                    if (showDeleted) {
+                        items(deletions, key = { "deleted-${it.id}" }) { entry ->
+                            DeletedHistoryRow(entry)
+                        }
+                    }
+                    item {
+                        FutureResultsHint(modifier = Modifier.padding(top = 68.dp, bottom = 24.dp))
+                    }
+                }
+            } else {
+                EmptyHistoryState(
+                    message = when {
+                        filter == HistoryFilter.Deleted -> "No plants have been deleted yet"
+                        weekRows.isEmpty() -> "New scan results will appear here"
+                        else -> "No scans match this filter"
+                    },
+                    modifier = Modifier.fillMaxWidth().weight(1f)
+                )
             }
         }
     }
@@ -341,7 +349,7 @@ fun HistoryScreen(
 
 private enum class HistoryStatus(val label: String, val background: Color, val foreground: Color) {
     Healthy("Healthy", StatusOkBg, StatusOkFg),
-    Issue("Issue", StatusIssueBg, StatusIssueFg),
+    Issue("Issue detected", StatusIssueBg, StatusIssueFg),
     Saved("Saved", StatusSavedBg, StatusSavedFg),
     Deleted("Deleted", StatusDeletedBg, StatusDeletedFg)
 }
@@ -353,172 +361,293 @@ private fun TileScanResult.historyStatus(): HistoryStatus = when {
 }
 
 @Composable
-private fun HistorySummaryStatCard(label: String, value: Int) {
-    Card(
+private fun HistorySummaryBand(alerts: Int, scans: Int, deleted: Int) {
+    Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, CardBorder),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        color = SummaryBackground
     ) {
-        Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
-            Text(text = label, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Muted)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = value.toString(),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Ink,
-                letterSpacing = (-0.3).sp
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth().height(80.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HistorySummaryStat("Alerts", alerts, Modifier.weight(1f))
+            SummaryDivider()
+            HistorySummaryStat("Scans", scans, Modifier.weight(1f))
+            SummaryDivider()
+            HistorySummaryStat("Deleted", deleted, Modifier.weight(1f))
         }
     }
 }
 
-private object HistoryTableColumns {
-    val tile = 52.dp
-    val plant = 128.dp
-    val whenCol = 132.dp
-    val result = 112.dp
-    val status = 92.dp
-    val score = 56.dp
-    val action = 76.dp
-    val total: Dp
-        get() = tile + plant + whenCol + result + status + score + action + 24.dp
-}
-
 @Composable
-private fun HistoryTableHeaderRow() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.White)
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        HistoryHeaderCell("Tile", HistoryTableColumns.tile)
-        HistoryHeaderCell("Plant", HistoryTableColumns.plant)
-        HistoryHeaderCell("When", HistoryTableColumns.whenCol)
-        HistoryHeaderCell("Result", HistoryTableColumns.result)
-        HistoryHeaderCell("Status", HistoryTableColumns.status)
-        HistoryHeaderCell("Score", HistoryTableColumns.score)
-        HistoryHeaderCell("Action", HistoryTableColumns.action)
+private fun HistorySummaryStat(label: String, value: Int, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value.toString(), color = Ink, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
 @Composable
-private fun HistoryHeaderCell(text: String, width: Dp) {
-    Text(
-        text = text.uppercase(),
-        modifier = Modifier.width(width),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.5.sp,
-        color = Muted
-    )
+private fun SingleLeafScanReminder() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = SoftGreen,
+        border = BorderStroke(1.dp, ForestGreen.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.78f)),
+                contentAlignment = Alignment.Center
+            ) {
+                SingleLeafIcon(modifier = Modifier.size(28.dp))
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Scan one leaf at a time",
+                    color = Ink,
+                    fontSize = 14.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "Keep only one tomato leaf in frame. Avoid hands, soil, other leaves, and background clutter for a more reliable result.",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SingleLeafIcon(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val leaf = Path().apply {
+            moveTo(size.width * 0.18f, size.height * 0.80f)
+            cubicTo(
+                size.width * 0.20f,
+                size.height * 0.32f,
+                size.width * 0.55f,
+                size.height * 0.10f,
+                size.width * 0.88f,
+                size.height * 0.14f
+            )
+            cubicTo(
+                size.width * 0.88f,
+                size.height * 0.54f,
+                size.width * 0.64f,
+                size.height * 0.82f,
+                size.width * 0.18f,
+                size.height * 0.80f
+            )
+        }
+        drawPath(
+            path = leaf,
+            color = ForestGreen,
+            style = Stroke(width = 2.2.dp.toPx())
+        )
+        drawLine(
+            color = ForestGreen,
+            start = androidx.compose.ui.geometry.Offset(size.width * 0.12f, size.height * 0.90f),
+            end = androidx.compose.ui.geometry.Offset(size.width * 0.65f, size.height * 0.38f),
+            strokeWidth = 2.2.dp.toPx()
+        )
+    }
+}
+
+@Composable
+private fun SummaryDivider() {
+    Box(modifier = Modifier.width(1.dp).height(40.dp).background(Divider))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HistoryMenu(
-    label: String,
-    expanded: Boolean,
-    onExpand: () -> Unit,
-    onDismiss: () -> Unit,
-    content: @Composable () -> Unit
-) {
-    Box {
-        Surface(
-            onClick = onExpand,
-            shape = RoundedCornerShape(8.dp),
-            color = Color.White,
-            border = BorderStroke(1.dp, CardBorderStrong),
-            shadowElevation = 1.dp
-        ) {
-            Text(
-                text = label,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Normal,
-                color = Ink,
-                maxLines = 1
-            )
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, content = { content() })
+private fun HistoryFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(9.dp),
+        color = if (selected) ForestGreen else PageBackground,
+        border = if (selected) null else BorderStroke(1.dp, Divider),
+        shadowElevation = if (selected) 2.dp else 0.dp
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            color = if (selected) Color.White else Muted,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
     }
 }
 
 @Composable
-private fun HistoryTableRow(
-    tileLabel: String,
-    plantName: String,
-    whenLabel: String,
-    result: String,
-    status: HistoryStatus,
-    score: String,
-    onView: (() -> Unit)?
-) {
+private fun HistoryScanRow(scan: TileScanResult, plantName: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.White)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        HistoryBodyCell(tileLabel, HistoryTableColumns.tile, FontWeight.Normal)
-        HistoryBodyCell(plantName, HistoryTableColumns.plant, FontWeight.Medium)
-        HistoryBodyCell(whenLabel, HistoryTableColumns.whenCol, FontWeight.Normal, Muted)
-        HistoryBodyCell(result, HistoryTableColumns.result, FontWeight.Normal)
-        Box(modifier = Modifier.width(HistoryTableColumns.status)) {
-            HistoryStatusPill(status)
-        }
-        HistoryBodyCell(score, HistoryTableColumns.score, FontWeight.Normal)
-        Box(
-            modifier = Modifier.width(HistoryTableColumns.action),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            if (onView != null) {
-                Surface(
-                    onClick = onView,
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color.White,
-                    border = BorderStroke(1.dp, Color(0xFF14213D).copy(alpha = 0.14f))
-                ) {
-                    Text(
-                        text = "View",
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TomatoShell
-                    )
-                }
+        HistoryThumbnail(scan = scan)
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = diseaseDisplayLabel(scan.diseaseName),
+                color = Ink,
+                fontSize = 16.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = "${formatHistoryTimestamp(scan.scannedAtMillis)} · $plantName",
+                color = Muted,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(7.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                HistoryStatusPill(scan.historyStatus())
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "${scan.percent}% confidence",
+                    color = Muted,
+                    fontSize = 12.sp,
+                    maxLines = 1
+                )
             }
         }
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = "View scan details",
+            tint = Muted,
+            modifier = Modifier.size(24.dp)
+        )
     }
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(RowDivider)
-    )
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Divider))
 }
 
 @Composable
-private fun HistoryBodyCell(
-    text: String,
-    width: Dp,
-    weight: FontWeight,
-    color: Color = Ink
-) {
-    Text(
-        text = text,
-        modifier = Modifier.width(width),
-        fontSize = 14.sp,
-        fontWeight = weight,
-        color = color,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
-    )
+private fun HistoryThumbnail(scan: TileScanResult) {
+    val modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp))
+    if (scan.image != null) {
+        Image(
+            bitmap = scan.image.asImageBitmap(),
+            contentDescription = "Saved scan of tile ${scan.tileNumber}",
+            modifier = modifier,
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        Box(modifier = modifier.background(SoftGreen), contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = Icons.Default.Eco,
+                contentDescription = null,
+                tint = ForestGreen,
+                modifier = Modifier.size(30.dp)
+            )
+        }
+    }
 }
+
+@Composable
+private fun DeletedHistoryRow(entry: FarmDeletion) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)).background(StatusDeletedBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.DeleteOutline, contentDescription = null, tint = StatusDeletedFg)
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = entry.plantName,
+                color = Ink,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = "${entry.deletedAtLabel} · Tile ${entry.tileNumber}",
+                color = Muted,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(7.dp))
+            HistoryStatusPill(HistoryStatus.Deleted)
+        }
+    }
+    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Divider))
+}
+
+@Composable
+private fun EmptyHistoryState(message: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        FutureResultsHint(modifier = Modifier.padding(bottom = 42.dp), message = message)
+    }
+}
+
+@Composable
+private fun FutureResultsHint(
+    modifier: Modifier = Modifier,
+    message: String = "New scan results will appear here"
+) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier.size(46.dp).clip(CircleShape).background(SoftGreen),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Eco,
+                contentDescription = null,
+                tint = ForestGreen,
+                modifier = Modifier.size(27.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(text = message, color = Muted, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+private fun formatHistoryTimestamp(timestamp: Long): String {
+    val target = Calendar.getInstance().apply { timeInMillis = timestamp }
+    val today = Calendar.getInstance()
+    val dayLabel = when {
+        sameCalendarDay(target, today) -> "Today"
+        sameCalendarDay(target, (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -1) }) -> "Yesterday"
+        else -> SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestamp))
+    }
+    val time = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
+    return "$dayLabel · $time"
+}
+
+private fun sameCalendarDay(first: Calendar, second: Calendar): Boolean =
+    first.get(Calendar.ERA) == second.get(Calendar.ERA) &&
+        first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
+        first.get(Calendar.DAY_OF_YEAR) == second.get(Calendar.DAY_OF_YEAR)
 
 @Composable
 private fun HistoryStatusPill(status: HistoryStatus) {
@@ -548,11 +677,16 @@ private fun HistoryDetailDialog(
     var awaitingRecommendation by remember(scan.scanId) { mutableStateOf(false) }
     var isLoadingRecommendation by remember(scan.scanId) { mutableStateOf(false) }
     var loadedRecommendation by remember(scan.scanId) { mutableStateOf<com.tomatoinsight.api.ValidationResponse?>(null) }
-    val result = (loadedRecommendation ?: scan.response.takeIf { it.hasAiRecommendations }
-        ?: scan.scores.asSavedValidationResponse()).ensureGuidesForAllDetections()
+    val baseResult = scan.response.takeIf { it.hasDiseaseResult }
+        ?: scan.scores.asSavedValidationResponse()
+    val result = (loadedRecommendation ?: baseResult).ensureGuidesForAllDetections()
+    val compatibleSavedRecommendation = savedRecommendation?.takeIf { saved ->
+                    saved.cacheKey.isNotBlank() &&
+                        saved.cacheKey == result.recommendationCacheKey()
+    }
     val needsOnlineRecommendation = scan.response.stage == "offline" &&
         loadedRecommendation?.recommendationSource != "groq" &&
-        savedRecommendation?.guides.isNullOrEmpty()
+        compatibleSavedRecommendation?.guides.isNullOrEmpty()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
@@ -568,16 +702,13 @@ private fun HistoryDetailDialog(
             showOfflineAlert = false
             try {
                 val server = withTimeout(300_000L) {
-                    ImageUploadHelper.validateTomatoLeaf(context, image)
+                    val bytes = ByteArrayOutputStream().use { stream ->
+                        image.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, stream)
+                        stream.toByteArray()
+                    }
+                    WebsiteScanClient.withSegmentationSeverity(bytes, baseResult)
                 }
-                loadedRecommendation = scan.response.copy(
-                    predictions = scan.response.predictions ?: scan.scores.asSavedValidationResponse().predictions,
-                    aiRecommendations = server.aiRecommendations,
-                    aiRecommendationError = server.aiRecommendationError,
-                    aiDisclaimer = server.aiDisclaimer,
-                    recommendationSource = server.recommendationSource,
-                    groqModel = server.groqModel
-                ).ensureGuidesForAllDetections()
+                loadedRecommendation = server.ensureGuidesForAllDetections()
                 loadedRecommendation?.let(onRecommendationSaved)
                 showCare = true
             } catch (_: Exception) {
@@ -634,6 +765,9 @@ private fun HistoryDetailDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 HealthStatusCard(result = result)
                 if (result.allDiseaseScores.any { it.percent > 0 }) {
+                    val showsRescanGuidance = result.severityAssessable == false &&
+                        result.allDiseaseScores.maxByOrNull { it.percent }
+                            ?.let { !isHealthyDisease(it.name) } == true
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = {
@@ -650,9 +784,11 @@ private fun HistoryDetailDialog(
                     ) {
                         Text(
                             when {
-                                isLoadingRecommendation -> "Loading recommendation..."
-                                showCare -> "Hide care recommendations"
-                                else -> "View care recommendations"
+                                isLoadingRecommendation -> "Preparing care plan..."
+                                showsRescanGuidance && showCare -> "Hide rescan guidance"
+                                showsRescanGuidance -> "View rescan guidance"
+                                showCare -> "Hide care plan"
+                                else -> "View care plan"
                             }
                         )
                     }
@@ -674,7 +810,7 @@ private fun HistoryDetailDialog(
                                 savedRecommendation = if (loadedRecommendation?.hasAiRecommendations == true) {
                                     null
                                 } else {
-                                    savedRecommendation
+                                    compatibleSavedRecommendation
                                 }
                             )
                         }

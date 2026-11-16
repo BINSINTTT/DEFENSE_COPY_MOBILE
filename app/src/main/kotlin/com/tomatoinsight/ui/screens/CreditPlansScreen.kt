@@ -21,10 +21,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,6 +37,8 @@ import com.tomatoinsight.data.PaymentRecord
 import com.tomatoinsight.data.formatPhp
 import com.tomatoinsight.ui.components.CreditPackCard
 import com.tomatoinsight.ui.components.CustomBottomBar
+import com.tomatoinsight.util.hasValidatedInternet
+import com.tomatoinsight.util.observeValidatedInternet
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
@@ -57,6 +62,10 @@ fun CreditPlansScreen(
     onNavigateToProfile: () -> Unit,
     onCameraClick: () -> Unit
 ) {
+    val context = LocalContext.current
+    val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
+        context.observeValidatedInternet().collect { value = it }
+    }
     val low = balance != null && balance <= 0
     Scaffold(
         containerColor = PageBg,
@@ -141,8 +150,21 @@ fun CreditPlansScreen(
                     color = Ink,
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
+                if (!internetAvailable) {
+                    Text(
+                        text = "No internet connection. Plan buttons are unavailable until you are back online.",
+                        color = Color(0xFFB45309),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
                 CREDIT_PACKS.forEach { pack ->
-                    CreditPackCard(pack = pack, onSelect = { onSelectPack(pack) })
+                    CreditPackCard(
+                        pack = pack,
+                        enabled = internetAvailable,
+                        onSelect = { onSelectPack(pack) }
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
                 }
             }

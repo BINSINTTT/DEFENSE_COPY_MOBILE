@@ -29,12 +29,16 @@ import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.tomatoinsight.data.PendingSignup
+import com.tomatoinsight.data.PendingSignupStore
 import com.tomatoinsight.ui.theme.TomatoPrimary
+import com.tomatoinsight.util.emailValidationError
 
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
-    onNavigateToSignup: () -> Unit
+    onNavigateToSignup: () -> Unit,
+    onNeedsVerification: () -> Unit
 ) {
     val context = LocalContext.current
     var email by remember { mutableStateOf("") }
@@ -61,7 +65,10 @@ fun LoginScreen(
             title = "Login",
             prompt = "Don't Have An Account?",
             linkLabel = "Sign Up",
-            onLinkClick = onNavigateToSignup
+            onLinkClick = {
+                if (PendingSignupStore.hasPending(context)) onNeedsVerification()
+                else onNavigateToSignup()
+            }
         )
 
         AuthEmailField(
@@ -100,8 +107,9 @@ fun LoginScreen(
             loading = isLoading,
             onClick = {
                 val trimmedEmail = email.trim()
-                if (trimmedEmail.isBlank()) {
-                    error = "Please enter your email"
+                val emailError = emailValidationError(trimmedEmail)
+                if (emailError != null) {
+                    error = emailError
                     return@AuthPrimaryButton
                 }
                 if (password.isBlank()) {
@@ -114,11 +122,31 @@ fun LoginScreen(
 
                 auth.signInWithEmailAndPassword(trimmedEmail, password)
                     .addOnCompleteListener { task ->
-                        isLoading = false
                         if (task.isSuccessful) {
+                            val user = auth.currentUser
+                            if (user != null && !user.isEmailVerified) {
+                                PendingSignupStore.save(
+                                    context,
+                                    PendingSignup(
+                                        email = trimmedEmail,
+                                        password = password,
+                                        status = PendingSignup.STATUS_AWAITING_VERIFICATION
+                                    )
+                                )
+                                user.sendEmailVerification()
+                                    .addOnCompleteListener {
+                                        auth.signOut()
+                                        isLoading = false
+                                        onNeedsVerification()
+                                    }
+                                return@addOnCompleteListener
+                            }
+                            isLoading = false
                             persistRememberedEmail(context, rememberMe, trimmedEmail)
+                            PendingSignupStore.clear(context)
                             onLoginSuccess()
                         } else {
+                            isLoading = false
                             val exception = task.exception
                             error = when (exception) {
                                 is FirebaseAuthInvalidUserException ->

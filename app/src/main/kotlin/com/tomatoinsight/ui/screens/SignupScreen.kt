@@ -16,18 +16,24 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.tomatoinsight.data.FarmAccountIsolation
 import com.tomatoinsight.data.FarmerProfile
 import com.tomatoinsight.data.FirestoreFarmRepository
+import com.tomatoinsight.data.PendingSignup
+import com.tomatoinsight.data.PendingSignupStore
 import com.tomatoinsight.data.UserFarmRepository
 import com.tomatoinsight.util.PASSWORD_REQUIREMENTS_HINT
+import com.tomatoinsight.util.await
+import com.tomatoinsight.util.awaitComplete
+import com.tomatoinsight.util.emailValidationError
 import com.tomatoinsight.util.passwordValidationError
 import kotlinx.coroutines.launch
 
 @Composable
 fun SignupScreen(
-    onSignupSuccess: () -> Unit,
+    onNeedsVerification: () -> Unit,
     onNavigateToLogin: () -> Unit
 ) {
     val context = LocalContext.current
@@ -44,7 +50,7 @@ fun SignupScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    val auth = FirebaseAuth.getInstance()
+    val auth = remember { FirebaseAuth.getInstance() }
 
     AuthScreenScaffold(
         headerMessage = "Create your account and simplify your farm monitoring.",
@@ -54,7 +60,13 @@ fun SignupScreen(
             title = "Sign up",
             prompt = "Already Have An Account?",
             linkLabel = "Login",
-            onLinkClick = onNavigateToLogin
+            onLinkClick = {
+                if (PendingSignupStore.hasPending(context)) {
+                    onNeedsVerification()
+                } else {
+                    onNavigateToLogin()
+                }
+            }
         )
 
         AuthPersonField(
@@ -126,80 +138,128 @@ fun SignupScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         AuthPrimaryButton(
-            label = "Create Account",
+            label = if (isLoading) "Creating account…" else "Create Account",
             loading = isLoading,
             onClick = {
                 when {
                     firstName.isBlank() -> error = "Please enter your first name"
                     lastName.isBlank() -> error = "Please enter your last name"
-                    email.isBlank() -> error = "Please enter your email"
-                    password.isBlank() -> error = "Please enter a password"
-                    else -> passwordValidationError(password)?.let {
-                        error = it
-                    } ?: run {
+                    else -> {
+                        val emailError = emailValidationError(email)
+                        if (emailError != null) {
+                            error = emailError
+                            return@AuthPrimaryButton
+                        }
+                        passwordValidationError(password)?.let {
+                            error = it
+                            return@AuthPrimaryButton
+                        }
                         if (password != confirmPassword) {
                             error = "Passwords do not match"
-                        } else {
-                            isLoading = true
-                            error = null
-                            auth.createUserWithEmailAndPassword(email.trim(), password)
-                                .addOnCompleteListener { task ->
-                                    if (task.isSuccessful) {
-                                        val user = auth.currentUser
-                                        val uid = user?.uid.orEmpty()
-                                        val fullName = listOf(firstName, middleName, lastName)
-                                            .filter { it.isNotBlank() }
-                                            .joinToString(" ")
-                                        val profileUpdates = UserProfileChangeRequest.Builder()
-                                            .setDisplayName(fullName)
-                                            .build()
+                            return@AuthPrimaryButton
+                        }
 
-                                        fun finishSignup() {
-                                            if (uid.isBlank()) {
-                                                isLoading = false
-                                                onSignupSuccess()
-                                                return
-                                            }
-                                            // Clear shared farm cache and start this uid empty
-                                            // before dashboard hydrate/sync can upload leftovers.
-                                            scope.launch {
-                                                runCatching {
-                                                    FarmAccountIsolation.prepareFreshSignup(
-                                                        context = context,
-                                                        uid = uid,
-                                                        farmRepository = UserFarmRepository(context)
-                                                    )
-                                                }
-                                                runCatching {
-                                                    FirestoreFarmRepository().saveProfile(
-                                                        uid = uid,
-                                                        profile = FarmerProfile(
-                                                            firstName = firstName.trim(),
-                                                            middleInitial = middleName.trim()
-                                                                .uppercase()
-                                                                .take(1),
-                                                            lastName = lastName.trim(),
-                                                            email = email.trim()
-                                                        ),
-                                                        includePhoto = false
-                                                    )
-                                                }
-                                                isLoading = false
-                                                onSignupSuccess()
-                                            }
-                                        }
+                        val trimmedEmail = email.trim()
+                        isLoading = true
+                        error = null
+                        PendingSignupStore.save(
+                            context,
+                            PendingSignup(
+                                email = trimmedEmail,
+                                password = password,
+                                status = PendingSignup.STATUS_CREATING,
+                                firstName = firstName.trim(),
+                                middleName = middleName.trim(),
+                                lastName = lastName.trim()
+                            )
+                        )
 
-                                        if (user != null) {
-                                            user.updateProfile(profileUpdates)
-                                                .addOnCompleteListener { finishSignup() }
-                                        } else {
-                                            finishSignup()
-                                        }
-                                    } else {
-                                        isLoading = false
-                                        error = task.exception?.localizedMessage ?: "Signup failed"
+                        scope.launch {
+                            try {
+                                val credential =
+                                    auth.createUserWithEmailAndPassword(trimmedEmail, password).await()
+                                val user = credential.user
+                                val uid = user?.uid.orEmpty()
+                                val fullName = listOf(firstName, middleName, lastName)
+                                    .filter { it.isNotBlank() }
+                                    .joinToString(" ")
+
+                                if (user != null && fullName.isNotBlank()) {
+                                    val profileUpdates = UserProfileChangeRequest.Builder()
+                                        .setDisplayName(fullName)
+                                        .build()
+                                    user.updateProfile(profileUpdates).awaitComplete()
+                                }
+
+                                if (uid.isNotBlank()) {
+                                    runCatching {
+                                        FarmAccountIsolation.prepareFreshSignup(
+                                            context = context,
+                                            uid = uid,
+                                            farmRepository = UserFarmRepository(context)
+                                        )
+                                    }
+                                    runCatching {
+                                        FirestoreFarmRepository().saveProfile(
+                                            uid = uid,
+                                            profile = FarmerProfile(
+                                                firstName = firstName.trim(),
+                                                middleInitial = middleName.trim()
+                                                    .uppercase()
+                                                    .take(1),
+                                                lastName = lastName.trim(),
+                                                email = trimmedEmail
+                                            ),
+                                            includePhoto = false
+                                        )
                                     }
                                 }
+
+                                user?.sendEmailVerification()?.awaitComplete()
+                                auth.signOut()
+
+                                PendingSignupStore.save(
+                                    context,
+                                    PendingSignup(
+                                        email = trimmedEmail,
+                                        password = password,
+                                        status = PendingSignup.STATUS_AWAITING_VERIFICATION,
+                                        firstName = firstName.trim(),
+                                        middleName = middleName.trim(),
+                                        lastName = lastName.trim()
+                                    )
+                                )
+                                PendingSignupStore.markResendCooldown(context, 60)
+                                isLoading = false
+                                onNeedsVerification()
+                            } catch (err: Exception) {
+                                if (err is FirebaseAuthUserCollisionException ||
+                                    err.message.orEmpty().contains("email address is already in use", true) ||
+                                    err.message.orEmpty().contains("EMAIL_EXISTS", true)
+                                ) {
+                                    PendingSignupStore.save(
+                                        context,
+                                        PendingSignup(
+                                            email = trimmedEmail,
+                                            password = password,
+                                            status = PendingSignup.STATUS_AWAITING_VERIFICATION,
+                                            firstName = firstName.trim(),
+                                            middleName = middleName.trim(),
+                                            lastName = lastName.trim()
+                                        )
+                                    )
+                                    isLoading = false
+                                    onNeedsVerification()
+                                    return@launch
+                                }
+                                // Keep pending so verify screen can resume if Firebase created the user.
+                                PendingSignupStore.updateStatus(
+                                    context,
+                                    PendingSignup.STATUS_AWAITING_VERIFICATION
+                                )
+                                isLoading = false
+                                onNeedsVerification()
+                            }
                         }
                     }
                 }

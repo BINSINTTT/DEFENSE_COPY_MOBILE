@@ -229,24 +229,26 @@ fun diseaseAbbreviation(name: String): String = when {
 }
 
 /**
- * Prefer an explicit segmentation severity label. Never treat AI confidence as severity.
- * When [affectedAreaPct] is measurable, map provisional Mild/Moderate/Severe bands.
+ * Measured affected leaf area selects the Mild/Moderate/Severe band. Never treat
+ * classification confidence as severity. Use the segmentation label only when its
+ * numeric area is unavailable.
  */
 fun diseaseSeverityLabel(
     name: String,
     affectedAreaPct: Double? = null,
     explicitLabel: String? = null
 ): String {
-    if (!explicitLabel.isNullOrBlank()) return explicitLabel
     if (name.equals("Healthy", ignoreCase = true)) return "Healthy"
     val pct = affectedAreaPct
-    if (pct == null || !pct.isFinite()) return "Unable to Assess"
-    return when {
-        pct >= 67.0 -> "Severe"
-        pct >= 34.0 -> "Moderate"
-        pct > 0.0 -> "Mild"
-        else -> "Unable to Assess"
+    if (pct != null && pct.isFinite()) {
+        return when {
+            pct >= 67.0 -> "Severe"
+            pct >= 34.0 -> "Moderate"
+            pct > 0.0 -> "Mild"
+            else -> "Unable to Assess"
+        }
     }
+    return explicitLabel?.takeIf { it.isNotBlank() } ?: "Unable to Assess"
 }
 
 /** @deprecated Prefer [diseaseSeverityLabel] with OpenCV extent, not confidence. */

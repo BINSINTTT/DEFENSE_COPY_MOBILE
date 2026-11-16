@@ -391,12 +391,19 @@ fun DashboardScreen(
                                 }
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = Color.White.copy(alpha = 0.25f),
-                                    modifier = Modifier.clickable(onClick = onOpenCreditPlans)
+                                    color = Color.White.copy(
+                                        alpha = if (internetAvailable) 0.25f else 0.14f
+                                    ),
+                                    modifier = Modifier.clickable(
+                                        enabled = internetAvailable,
+                                        onClick = onOpenCreditPlans
+                                    )
                                 ) {
                                     Text(
                                         text = "Credit: $creditText",
-                                        color = Color.White,
+                                        color = Color.White.copy(
+                                            alpha = if (internetAvailable) 1f else 0.65f
+                                        ),
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)

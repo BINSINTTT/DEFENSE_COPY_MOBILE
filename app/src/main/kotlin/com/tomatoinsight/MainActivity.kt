@@ -105,8 +105,10 @@ import com.tomatoinsight.ui.screens.PlantInfoScreen
 import com.tomatoinsight.ui.screens.ProfileScreen
 import com.tomatoinsight.ui.screens.SignupScreen
 import com.tomatoinsight.ui.screens.SplashScreen
+import com.tomatoinsight.ui.screens.VerifyEmailScreen
 import com.tomatoinsight.ui.screens.appRouteAfterSplash
 import com.tomatoinsight.ui.screens.TileMonitorDetailScreen
+import com.tomatoinsight.data.PendingSignupStore
 import com.tomatoinsight.ui.theme.TomatoInsightTheme
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
@@ -160,7 +162,7 @@ fun TomatoInsightApp() {
     val firestoreFarmRepository = remember { FirestoreFarmRepository() }
     val creditRepository = remember { CreditRepository(context) }
     val scope = rememberCoroutineScope()
-    val signedInAtStart = auth.currentUser?.uid
+    val signedInAtStart = auth.currentUser?.takeIf { it.isEmailVerified }?.uid
 
     var farmRows by remember { mutableIntStateOf(0) }
     var farmColumns by remember { mutableIntStateOf(0) }
@@ -191,11 +193,15 @@ fun TomatoInsightApp() {
     var viewingSavedScan by remember { mutableStateOf(false) }
     val tileScanHistory = remember { mutableStateMapOf<Int, MutableList<com.tomatoinsight.data.TileScanResult>>() }
 
-    var currentUserId by remember { mutableStateOf(auth.currentUser?.uid) }
+    var currentUserId by remember {
+        mutableStateOf(auth.currentUser?.takeIf { it.isEmailVerified }?.uid)
+    }
 
     DisposableEffect(auth) {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
-            currentUserId = firebaseAuth.currentUser?.uid
+            val user = firebaseAuth.currentUser
+            // Unverified sessions (signup / verify polling) must not enter the farm graph.
+            currentUserId = if (user != null && user.isEmailVerified) user.uid else null
         }
         auth.addAuthStateListener(listener)
         onDispose { auth.removeAuthStateListener(listener) }
@@ -211,9 +217,15 @@ fun TomatoInsightApp() {
     }
 
     fun openCheckout(pack: CreditPack) {
+        if (!context.hasValidatedInternet()) return
         checkoutError = null
         checkoutBusy = false
         checkoutPack = pack
+    }
+
+    fun openCreditPlans() {
+        if (!context.hasValidatedInternet()) return
+        navController.navigate("plans")
     }
 
     fun payDemoCheckout() {
@@ -331,7 +343,11 @@ fun TomatoInsightApp() {
                     aiRecommendationError = response.aiRecommendationError,
                     aiDisclaimer = response.aiDisclaimer,
                     recommendationSource = response.recommendationSource,
-                    groqModel = response.groqModel
+                    groqModel = response.groqModel,
+                    severityLabel = response.severityLabel,
+                    affectedAreaPct = response.affectedAreaPct,
+                    severityAssessable = response.severityAssessable,
+                    severityReason = response.severityReason
                 )
             )
             val next = current.toMutableList()
@@ -775,7 +791,16 @@ fun TomatoInsightApp() {
                     }
                 },
                 onNavigateToSignup = {
-                    navController.navigate("signup")
+                    if (PendingSignupStore.hasPending(context)) {
+                        navController.navigate("verify")
+                    } else {
+                        navController.navigate("signup")
+                    }
+                },
+                onNeedsVerification = {
+                    navController.navigate("verify") {
+                        launchSingleTop = true
+                    }
                 }
             )
         }
@@ -787,13 +812,40 @@ fun TomatoInsightApp() {
             popExitTransition = { forwardPopExit() }
         ) {
             SignupScreen(
-                onSignupSuccess = {
-                    navController.navigate("dashboard") {
-                        popUpTo("login") { inclusive = true }
+                onNeedsVerification = {
+                    navController.navigate("verify") {
+                        popUpTo("signup") { inclusive = true }
+                        launchSingleTop = true
                     }
                 },
                 onNavigateToLogin = {
-                    navController.navigate("login")
+                    if (PendingSignupStore.hasPending(context)) {
+                        navController.navigate("verify") {
+                            launchSingleTop = true
+                        }
+                    } else {
+                        navController.navigate("login")
+                    }
+                }
+            )
+        }
+        composable(
+            route = "verify",
+            enterTransition = { forwardEnter() },
+            exitTransition = { forwardExit() },
+            popEnterTransition = { forwardPopEnter() },
+            popExitTransition = { forwardPopExit() }
+        ) {
+            VerifyEmailScreen(
+                onVerified = {
+                    navController.navigate("dashboard") {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onBackToLogin = {
+                    navController.navigate("login") {
+                        popUpTo("verify") { inclusive = true }
+                    }
                 }
             )
         }
@@ -811,7 +863,7 @@ fun TomatoInsightApp() {
                 creditBalance = accountCredits?.balance,
                 creditsLoaded = creditsReady && accountCredits != null,
                 profileBonusGranted = accountCredits?.profileBonusGranted ?: true,
-                onOpenCreditPlans = { navController.navigate("plans") },
+                onOpenCreditPlans = { openCreditPlans() },
                 cloudError = cloudError,
                 onLogout = { openSignedOutStart() },
                 onNavigateToAddBlueprint = {
@@ -959,7 +1011,7 @@ fun TomatoInsightApp() {
                 creditBalance = accountCredits?.balance,
                 creditsLoaded = creditsReady && accountCredits != null,
                 profileBonusGranted = accountCredits?.profileBonusGranted ?: false,
-                onOpenCreditPlans = { navController.navigate("plans") },
+                onOpenCreditPlans = { openCreditPlans() },
                 onProfileSaved = { profile, includePhoto ->
                     val keptPhoto = if (includePhoto) profile.photo else farmerProfile.photo
                     val next = mergeFarmerProfiles(
@@ -1339,8 +1391,9 @@ fun TomatoInsightApp() {
             onDismiss = { showOutOfCredit = false },
             onSelectPack = { openCheckout(it) },
             onViewPlans = {
+                if (!context.hasValidatedInternet()) return@OutOfCreditDialog
                 showOutOfCredit = false
-                navController.navigate("plans")
+                openCreditPlans()
             }
         )
     }

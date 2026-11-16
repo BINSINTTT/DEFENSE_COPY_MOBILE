@@ -60,7 +60,7 @@ object OfflineDiseaseClassifier {
             message = if (keptOnlineCare) {
                 leaf.message ?: "Tomato leaf detected."
             } else {
-                "Classified on this phone. Care tips below cover every detected score; online AI can refine them."
+                "Classified on this phone. Scan online to measure affected leaf area and prepare the right care plan."
             },
             aiRecommendations = leaf.aiRecommendations,
             aiRecommendationError = leaf.aiRecommendationError,

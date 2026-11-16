@@ -65,6 +65,7 @@ import com.tomatoinsight.data.SavedRecommendation
 import com.tomatoinsight.data.ScanSaveOutcome
 import com.tomatoinsight.data.asSavedValidationResponse
 import com.tomatoinsight.data.ensureGuidesForAllDetections
+import com.tomatoinsight.data.recommendationCacheKey
 import com.tomatoinsight.api.ValidationRetrofitClient
 import retrofit2.HttpException
 import java.io.ByteArrayOutputStream
@@ -214,15 +215,16 @@ fun PlantInfoScreen(
                 } else {
                     refined
                 }
-                validationResult = withSeverity
-                val leafOnly = withSeverity.stage == "offline" && !withSeverity.hasDiseaseResult
-                hasPendingSave = withSeverity.confirmsTomatoLeaf() && !leafOnly
-                showNotTomatoAlert = !withSeverity.isError && !withSeverity.confirmsTomatoLeaf()
+                val recommendationReady = withSeverity.ensureGuidesForAllDetections()
+                validationResult = recommendationReady
+                val leafOnly = recommendationReady.stage == "offline" && !recommendationReady.hasDiseaseResult
+                hasPendingSave = recommendationReady.confirmsTomatoLeaf() && !leafOnly
+                showNotTomatoAlert = !recommendationReady.isError && !recommendationReady.confirmsTomatoLeaf()
                 Log.d(
                     "TomatoInsight",
-                    "Validation result=${withSeverity.result}, class=${withSeverity.detectedClass}, " +
-                        "disease=${withSeverity.topDisease} severity=${withSeverity.severityLabel} " +
-                        "area=${withSeverity.affectedAreaPct} mode=${withSeverity.inferenceMode}"
+                    "Validation result=${recommendationReady.result}, class=${recommendationReady.detectedClass}, " +
+                        "disease=${recommendationReady.topDisease} severity=${recommendationReady.severityLabel} " +
+                        "area=${recommendationReady.affectedAreaPct} mode=${recommendationReady.inferenceMode}"
                 )
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e("TomatoInsight", "Validation timed out", e)
@@ -275,20 +277,17 @@ fun PlantInfoScreen(
             awaitingRecommendation = false
             showOfflineRecommendationAlert = false
             try {
-                val server = withTimeout(300_000L) {
-                    ImageUploadHelper.validateTomatoLeaf(context, bitmap)
-                }
                 val current = validationResult
-                val merged = if (current?.stage == "offline") {
-                    current.copy(
-                        aiRecommendations = server.aiRecommendations,
-                        aiRecommendationError = server.aiRecommendationError,
-                        aiDisclaimer = server.aiDisclaimer,
-                        recommendationSource = server.recommendationSource,
-                        groqModel = server.groqModel
-                    ).ensureGuidesForAllDetections()
-                } else {
-                    server.ensureGuidesForAllDetections()
+                val merged = withTimeout(300_000L) {
+                    if (current != null) {
+                        val bytes = ByteArrayOutputStream().use { stream ->
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                            stream.toByteArray()
+                        }
+                        WebsiteScanClient.withSegmentationSeverity(bytes, current)
+                    } else {
+                        ImageUploadHelper.validateTomatoLeaf(context, bitmap)
+                    }
                 }
                 validationResult = merged
                 recommendationPendingSave = isSavedScan &&
@@ -323,6 +322,10 @@ fun PlantInfoScreen(
         savedClassification -> savedScores.asSavedValidationResponse()
         validationResult?.confirmsTomatoLeaf() == true -> validationResult
         else -> null
+    }
+    val compatibleSavedRecommendation = savedRecommendation?.takeIf { saved ->
+        val current = displayResult ?: return@takeIf false
+        saved.cacheKey.isNotBlank() && saved.cacheKey == current.recommendationCacheKey()
     }
 
     fun rotateBitmapIfNeeded(context: Context, uri: Uri, bitmap: Bitmap): Bitmap {
@@ -651,10 +654,12 @@ fun PlantInfoScreen(
                                 }
                             }
 
-                            // Offline scans already have rule guides for every %.
-                            // When online, still ask the website/Groq to refine the top match.
+                            // Recommendations always target the top diagnosis; severity selects the plan.
                             val needsOnlineRecommendation = displayResult?.stage == "offline" &&
-                                displayResult?.recommendationSource != "groq"
+                                displayResult.recommendationSource != "groq"
+                            val showsRescanGuidance = displayResult?.severityAssessable == false &&
+                                displayResult.allDiseaseScores.maxByOrNull { it.percent }
+                                    ?.let { !isHealthyDisease(it.name) } == true
                             val canViewIntervention = displayResult?.allDiseaseScores?.any { it.percent > 0 } == true &&
                                 !isValidating
 
@@ -699,9 +704,11 @@ fun PlantInfoScreen(
                                 ) {
                                     Text(
                                         text = when {
-                                            isLoadingRecommendation -> "Loading recommendation..."
-                                            showIntervention -> "Hide Recommendation"
-                                            else -> "View Recommendation"
+                                            isLoadingRecommendation -> "Preparing care plan..."
+                                            showsRescanGuidance && showIntervention -> "Hide rescan guidance"
+                                            showsRescanGuidance -> "View rescan guidance"
+                                            showIntervention -> "Hide care plan"
+                                            else -> "View care plan"
                                         },
                                         fontWeight = FontWeight.Medium,
                                         fontSize = 15.sp,
@@ -732,7 +739,7 @@ fun PlantInfoScreen(
                                                 ) {
                                                     null
                                                 } else {
-                                                    savedRecommendation
+                                                    compatibleSavedRecommendation
                                                 }
                                             )
                                         }
@@ -788,7 +795,7 @@ fun PlantInfoScreen(
                                 Text(
                                     text = when {
                                         isSavingInfo -> "Saving..."
-                                        canSaveRecommendation && !hasPendingSave -> "Save recommendation"
+                                        canSaveRecommendation && !hasPendingSave -> "Save care plan"
                                         else -> "Save Info"
                                     },
                                     fontWeight = FontWeight.Medium,

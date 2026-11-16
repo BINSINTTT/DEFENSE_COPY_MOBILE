@@ -28,11 +28,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,6 +46,8 @@ import com.tomatoinsight.data.CREDIT_PACKS
 import com.tomatoinsight.data.CreditPack
 import com.tomatoinsight.data.formatPhp
 import com.tomatoinsight.ui.theme.TomatoRed
+import com.tomatoinsight.util.hasValidatedInternet
+import com.tomatoinsight.util.observeValidatedInternet
 import kotlinx.coroutines.delay
 
 private val PlanInk = Color(0xFF1A1A1A)
@@ -131,6 +137,10 @@ fun OutOfCreditDialog(
     onSelectPack: (CreditPack) -> Unit,
     onViewPlans: () -> Unit
 ) {
+    val context = LocalContext.current
+    val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
+        context.observeValidatedInternet().collect { value = it }
+    }
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(20.dp), color = Color.White) {
             Column(
@@ -147,9 +157,22 @@ fun OutOfCreditDialog(
                     color = Color(0xFF667085),
                     fontSize = 14.sp
                 )
+                if (!internetAvailable) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Plans need an internet connection. Connect to choose a pack.",
+                        color = Color(0xFFB45309),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 CREDIT_PACKS.forEach { pack ->
-                    CreditPackCard(pack = pack, onSelect = { onSelectPack(pack) })
+                    CreditPackCard(
+                        pack = pack,
+                        enabled = internetAvailable,
+                        onSelect = { onSelectPack(pack) }
+                    )
                     Spacer(modifier = Modifier.height(10.dp))
                 }
                 Text(
@@ -160,6 +183,7 @@ fun OutOfCreditDialog(
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = onViewPlans,
+                    enabled = internetAvailable,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = TomatoRed)
@@ -252,7 +276,8 @@ fun DemoCheckoutDialog(
 fun CreditPackCard(
     pack: CreditPack,
     onSelect: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     val featured = pack.featured
     val ink = if (featured) Color.White else PlanInk
@@ -262,6 +287,7 @@ fun CreditPackCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.55f)
             .then(
                 if (featured) {
                     Modifier.background(
@@ -335,21 +361,25 @@ fun CreditPackCard(
             }
             Button(
                 onClick = onSelect,
+                enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp),
                 shape = RoundedCornerShape(50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (featured) Color.White else Color.White,
-                    contentColor = if (featured) FeaturedEnd else PlanInk
+                    contentColor = if (featured) FeaturedEnd else PlanInk,
+                    disabledContainerColor = Color(0xFFE5E7EB),
+                    disabledContentColor = Color(0xFF9CA3AF)
                 ),
                 border = if (featured) null else androidx.compose.foundation.BorderStroke(1.5.dp, PlanLine),
                 elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = if (featured) 6.dp else 0.dp
+                    defaultElevation = if (featured && enabled) 6.dp else 0.dp,
+                    disabledElevation = 0.dp
                 )
             ) {
                 Text(
-                    text = pack.ctaLabel,
+                    text = if (enabled) pack.ctaLabel else "Offline",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
                     modifier = Modifier.padding(vertical = 4.dp)
