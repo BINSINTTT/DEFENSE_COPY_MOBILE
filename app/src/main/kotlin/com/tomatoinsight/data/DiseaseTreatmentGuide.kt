@@ -277,6 +277,7 @@ data class SavedRecommendation(
 
 /** Keeps exactly one care section for the top diagnosis and the measured severity. */
 fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
+    if (awaitingOpenCvSeverity()) return this
     val top = allDiseaseScores
         .filter { it.percent > 0 }
         .sortedWith(

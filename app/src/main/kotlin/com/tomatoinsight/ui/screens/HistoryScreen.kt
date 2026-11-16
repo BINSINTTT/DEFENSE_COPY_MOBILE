@@ -693,10 +693,10 @@ private fun HistoryDetailDialog(
         context.observeValidatedInternet().collect { value = it }
     }
 
-    fun loadCareRecommendation() {
+    fun loadCareRecommendation(openCare: Boolean = true) {
         val image = scan.image ?: return
         scope.launch {
-            showCare = true
+            if (openCare) showCare = true
             isLoadingRecommendation = true
             awaitingRecommendation = false
             showOfflineAlert = false
@@ -710,9 +710,9 @@ private fun HistoryDetailDialog(
                 }
                 loadedRecommendation = server.ensureGuidesForAllDetections()
                 loadedRecommendation?.let(onRecommendationSaved)
-                showCare = true
+                if (openCare) showCare = true
             } catch (_: Exception) {
-                showCare = false
+                if (openCare) showCare = false
             } finally {
                 isLoadingRecommendation = false
             }
@@ -722,6 +722,17 @@ private fun HistoryDetailDialog(
     LaunchedEffect(awaitingRecommendation, internetAvailable) {
         if (awaitingRecommendation && internetAvailable && scan.image != null) {
             loadCareRecommendation()
+        }
+    }
+
+    LaunchedEffect(internetAvailable, baseResult.severityReason) {
+        if (
+            internetAvailable &&
+            baseResult.awaitingOpenCvSeverity() &&
+            loadedRecommendation == null &&
+            scan.image != null
+        ) {
+            loadCareRecommendation(openCare = false)
         }
     }
 
@@ -764,14 +775,23 @@ private fun HistoryDetailDialog(
                 Text(text = "Classification", fontWeight = FontWeight.Bold, color = Ink)
                 Spacer(modifier = Modifier.height(8.dp))
                 HealthStatusCard(result = result)
-                if (result.allDiseaseScores.any { it.percent > 0 }) {
+                if (isLoadingRecommendation && result.awaitingOpenCvSeverity()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(text = "Syncing severity…", color = Muted, fontSize = 13.sp)
+                    }
+                }
+                if (result.allDiseaseScores.any { it.percent > 0 } && !result.awaitingOpenCvSeverity()) {
                     val showsRescanGuidance = result.severityAssessable == false &&
                         result.allDiseaseScores.maxByOrNull { it.percent }
                             ?.let { !isHealthyDisease(it.name) } == true
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = {
-                            if (needsOnlineRecommendation && !internetAvailable) {
+                            if (!internetAvailable) {
+                                showCare = false
                                 awaitingRecommendation = true
                                 showOfflineAlert = true
                             } else if (needsOnlineRecommendation) {
@@ -785,15 +805,15 @@ private fun HistoryDetailDialog(
                         Text(
                             when {
                                 isLoadingRecommendation -> "Preparing care plan..."
-                                showsRescanGuidance && showCare -> "Hide rescan guidance"
+                                showsRescanGuidance && showCare && internetAvailable -> "Hide rescan guidance"
                                 showsRescanGuidance -> "View rescan guidance"
-                                showCare -> "Hide care plan"
+                                showCare && internetAvailable -> "Hide care plan"
                                 else -> "View care plan"
                             }
                         )
                     }
                     AnimatedVisibility(
-                        visible = showCare,
+                        visible = showCare && internetAvailable,
                         enter = fadeIn(tween(280, easing = FastOutSlowInEasing)) +
                             expandVertically(tween(320, easing = FastOutSlowInEasing)),
                         exit = fadeOut(tween(200, easing = FastOutSlowInEasing)) +

@@ -58,6 +58,7 @@ import com.tomatoinsight.ml.OfflineEarlySpottedSpecialist
 import com.tomatoinsight.ml.OfflineLeafValidator
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
+import com.tomatoinsight.api.AWAITING_OPENCV_SEVERITY
 import com.tomatoinsight.api.DiseaseScore
 import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.isHealthyDisease
@@ -72,6 +73,7 @@ import java.io.ByteArrayOutputStream
 import com.tomatoinsight.ui.camera.LeafCameraScreen
 import com.tomatoinsight.ui.components.CustomBottomBar
 import com.tomatoinsight.ui.components.InvalidLeafValidationDialog
+import com.tomatoinsight.ui.components.OneLeafScanReminderDialog
 import com.tomatoinsight.ui.components.invalidLeafHighlightReason
 import com.tomatoinsight.ui.components.DiseaseTreatmentCard
 import com.tomatoinsight.ui.components.HealthStatusCard
@@ -105,6 +107,7 @@ fun PlantInfoScreen(
 
     var capturedImage by remember(tileNumber) { mutableStateOf(savedImage) }
     var showSourceSelector by remember { mutableStateOf(false) }
+    var showLeafReminder by remember { mutableStateOf(false) }
     var showLeafCamera by remember { mutableStateOf(false) }
     var isValidating by remember { mutableStateOf(false) }
     var validationResult by remember(tileNumber) { mutableStateOf(savedResult) }
@@ -112,12 +115,16 @@ fun PlantInfoScreen(
     var isSavedScan by remember(tileNumber) { mutableStateOf(savedResult != null) }
     var hasPendingSave by remember(tileNumber) { mutableStateOf(false) }
     var showIntervention by remember(tileNumber, savedScores) {
-        mutableStateOf(savedScores.any { !isHealthyDisease(it.name) && it.percent > 0 })
+        mutableStateOf(
+            context.hasValidatedInternet() &&
+                savedScores.any { !isHealthyDisease(it.name) && it.percent > 0 }
+        )
     }
     var showNotTomatoAlert by remember { mutableStateOf(false) }
     var showOfflineRecommendationAlert by remember { mutableStateOf(false) }
     var awaitingRecommendation by remember { mutableStateOf(false) }
     var isLoadingRecommendation by remember { mutableStateOf(false) }
+    var isSyncingSeverity by remember { mutableStateOf(false) }
     var recommendationPendingSave by remember(tileNumber) { mutableStateOf(false) }
     var plantNameInput by remember(tileNumber) { mutableStateOf(plantName) }
     var isSavingInfo by remember { mutableStateOf(false) }
@@ -170,7 +177,16 @@ fun PlantInfoScreen(
                 } else {
                     response
                 }
-                val refined = if (scored.confirmsTomatoLeaf() && context.hasValidatedInternet()) {
+                // Early blight and spotted wilt share a pattern, so the specialist
+                // segmentation model runs after the four-class disease model.
+                val refined = if (!scored.confirmsTomatoLeaf()) {
+                    scored
+                } else if (OfflineEarlySpottedSpecialist.isAvailable(context)) {
+                    withContext(Dispatchers.IO) {
+                        val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
+                        OfflineEarlySpottedSpecialist.refine(context, prepared, scored)
+                    }
+                } else if (context.hasValidatedInternet()) {
                     withContext(Dispatchers.IO) {
                         val bytes = ByteArrayOutputStream().use { stream ->
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
@@ -178,15 +194,10 @@ fun PlantInfoScreen(
                         }
                         WebsiteScanClient.withSpecialistRefinement(bytes, scored)
                     }
-                } else if (scored.confirmsTomatoLeaf()) {
-                    withContext(Dispatchers.IO) {
-                        val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
-                        OfflineEarlySpottedSpecialist.refine(context, prepared, scored)
-                    }
                 } else {
                     scored
                 }
-                // Severity segmentation runs after the final refined disease choice.
+                // OpenCV severity needs the website. Offline scans keep that field blank.
                 val withSeverity = if (refined.confirmsTomatoLeaf() && context.hasValidatedInternet()) {
                     withContext(Dispatchers.IO) {
                         val bytes = ByteArrayOutputStream().use { stream ->
@@ -196,22 +207,16 @@ fun PlantInfoScreen(
                         WebsiteScanClient.withSegmentationSeverity(bytes, refined)
                     }
                 } else if (refined.confirmsTomatoLeaf()) {
-                    val top = refined.allDiseaseScores.maxByOrNull { it.percent }
-                    if (top != null && isHealthyDisease(top.name)) {
-                        refined.copy(
-                            severityLabel = "Healthy",
-                            affectedAreaPct = 0.0,
-                            severityAssessable = true,
-                            severityReason = "offline_healthy"
-                        )
-                    } else {
-                        refined.copy(
-                            severityLabel = "Unable to Assess",
-                            affectedAreaPct = null,
-                            severityAssessable = false,
-                            severityReason = "offline_no_severity_model"
-                        )
-                    }
+                    refined.copy(
+                        severityLabel = null,
+                        affectedAreaPct = null,
+                        severityAssessable = null,
+                        severityReason = AWAITING_OPENCV_SEVERITY,
+                        aiRecommendations = null,
+                        aiRecommendationError = null,
+                        recommendationSource = null,
+                        groqModel = null
+                    )
                 } else {
                     refined
                 }
@@ -308,6 +313,32 @@ fun PlantInfoScreen(
         val image = capturedImage
         if (awaitingRecommendation && internetAvailable && image != null) {
             loadCareRecommendation(image)
+        }
+    }
+
+    LaunchedEffect(internetAvailable, validationResult?.severityReason, capturedImage) {
+        val image = capturedImage ?: return@LaunchedEffect
+        val current = validationResult ?: return@LaunchedEffect
+        if (!internetAvailable || !current.awaitingOpenCvSeverity()) return@LaunchedEffect
+        if (!current.confirmsTomatoLeaf() || !current.hasDiseaseResult) return@LaunchedEffect
+        isSyncingSeverity = true
+        try {
+            val merged = withTimeout(300_000L) {
+                val bytes = ByteArrayOutputStream().use { stream ->
+                    image.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                    stream.toByteArray()
+                }
+                WebsiteScanClient.withSegmentationSeverity(bytes, current)
+            }.ensureGuidesForAllDetections()
+            validationResult = merged
+            if (isSavedScan && !hasPendingSave) {
+                recommendationPendingSave = merged.hasAiRecommendations
+                if (merged.hasAiRecommendations) onRecommendationSaved(merged)
+            }
+        } catch (e: Exception) {
+            Log.e("TomatoInsight", "OpenCV severity sync failed", e)
+        } finally {
+            isSyncingSeverity = false
         }
     }
 
@@ -426,6 +457,16 @@ fun PlantInfoScreen(
         )
     }
 
+    if (showLeafReminder) {
+        OneLeafScanReminderDialog(
+            onContinue = {
+                showLeafReminder = false
+                showSourceSelector = true
+            },
+            onDismiss = { showLeafReminder = false }
+        )
+    }
+
     if (showSourceSelector) {
         AlertDialog(
             onDismissRequest = { showSourceSelector = false },
@@ -497,7 +538,7 @@ fun PlantInfoScreen(
             CustomBottomBar(
                 hideNavIcons = true,
                 containerColor = pageColor,
-                onCameraClick = { showSourceSelector = true }
+                onCameraClick = { showLeafReminder = true }
             )
         }
     ) { padding ->
@@ -655,23 +696,28 @@ fun PlantInfoScreen(
                             }
 
                             // Recommendations always target the top diagnosis; severity selects the plan.
-                            val needsOnlineRecommendation = displayResult?.stage == "offline" &&
+                            val awaitingSeverity = displayResult?.awaitingOpenCvSeverity() == true
+                            val needsOnlineRecommendation = !awaitingSeverity &&
+                                displayResult?.stage == "offline" &&
                                 displayResult.recommendationSource != "groq"
                             val showsRescanGuidance = displayResult?.severityAssessable == false &&
                                 displayResult.allDiseaseScores.maxByOrNull { it.percent }
                                     ?.let { !isHealthyDisease(it.name) } == true
-                            val canViewIntervention = displayResult?.allDiseaseScores?.any { it.percent > 0 } == true &&
-                                !isValidating
+                            val canViewIntervention = !awaitingSeverity &&
+                                displayResult?.allDiseaseScores?.any { it.percent > 0 } == true &&
+                                !isValidating &&
+                                !isSyncingSeverity
 
                             if (canViewIntervention) {
+                                val carePlanOpen = showIntervention && internetAvailable
                                 OutlinedButton(
                                     onClick = {
-                                        if (showIntervention && !needsOnlineRecommendation) {
+                                        if (!internetAvailable) {
                                             showIntervention = false
-                                        } else if (needsOnlineRecommendation && !internetAvailable) {
-                                            showIntervention = true
                                             awaitingRecommendation = true
                                             showOfflineRecommendationAlert = true
+                                        } else if (showIntervention && !needsOnlineRecommendation) {
+                                            showIntervention = false
                                         } else if (needsOnlineRecommendation) {
                                             showIntervention = true
                                             capturedImage?.let { loadCareRecommendation(it) }
@@ -686,14 +732,14 @@ fun PlantInfoScreen(
                                     shape = RoundedCornerShape(12.dp),
                                     border = BorderStroke(
                                         width = 1.dp,
-                                        color = if (showIntervention) {
+                                        color = if (carePlanOpen) {
                                             TomatoRed.copy(alpha = 0.45f)
                                         } else {
                                             Color(0xFFE5E5E5)
                                         }
                                     ),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = if (showIntervention) {
+                                        containerColor = if (carePlanOpen) {
                                             TomatoRed.copy(alpha = 0.06f)
                                         } else {
                                             Color.White
@@ -705,9 +751,9 @@ fun PlantInfoScreen(
                                     Text(
                                         text = when {
                                             isLoadingRecommendation -> "Preparing care plan..."
-                                            showsRescanGuidance && showIntervention -> "Hide rescan guidance"
+                                            showsRescanGuidance && carePlanOpen -> "Hide rescan guidance"
                                             showsRescanGuidance -> "View rescan guidance"
-                                            showIntervention -> "Hide care plan"
+                                            carePlanOpen -> "Hide care plan"
                                             else -> "View care plan"
                                         },
                                         fontWeight = FontWeight.Medium,
@@ -717,7 +763,7 @@ fun PlantInfoScreen(
                                 }
 
                                 AnimatedVisibility(
-                                    visible = showIntervention,
+                                    visible = showIntervention && internetAvailable,
                                     enter = fadeIn(tween(280, easing = FastOutSlowInEasing)) +
                                         expandVertically(tween(320, easing = FastOutSlowInEasing)),
                                     exit = fadeOut(tween(200, easing = FastOutSlowInEasing)) +
@@ -882,7 +928,7 @@ fun PlantInfoScreen(
             }
             }
         }
-            if (isValidating) {
+            if (isValidating || isSyncingSeverity) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -894,13 +940,25 @@ fun PlantInfoScreen(
                         color = Color.White,
                         shadowElevation = 12.dp
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier
-                                .padding(28.dp)
-                                .size(42.dp),
-                            color = TomatoGreen,
-                            strokeWidth = 3.dp
-                        )
+                        Column(
+                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(42.dp),
+                                color = TomatoGreen,
+                                strokeWidth = 3.dp
+                            )
+                            if (isSyncingSeverity) {
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Text(
+                                    text = "Syncing severity…",
+                                    color = Color(0xFF1C1B1F),
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 15.sp
+                                )
+                            }
+                        }
                     }
                 }
             }

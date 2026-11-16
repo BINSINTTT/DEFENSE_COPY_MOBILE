@@ -31,6 +31,7 @@ import com.tomatoinsight.api.diseaseAbbreviation
 import com.tomatoinsight.api.diseaseDisplayLabel
 import com.tomatoinsight.api.diseaseSeverityLabel
 import com.tomatoinsight.api.isHealthyDisease
+import com.tomatoinsight.api.AWAITING_OPENCV_SEVERITY
 
 private val PanelWhite = Color.White
 private val CardLight = Color(0xFFF3F4F6)
@@ -58,14 +59,16 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
     val leading = if (filled) scores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 } else null
     val confidence = leading?.percent
     val isHealthy = leading != null && isHealthyDisease(leading.name)
+    val awaitingSeverity = result?.severityReason == AWAITING_OPENCV_SEVERITY
     val affectedAreaPct = when {
+        awaitingSeverity -> null
         leading == null -> null
         isHealthy -> result?.affectedAreaPct ?: 0.0
         result?.severityAssessable == true -> result.affectedAreaPct
         else -> result?.affectedAreaPct
     }
     val severity = when {
-        leading == null -> "—"
+        leading == null || awaitingSeverity -> "—"
         else -> diseaseSeverityLabel(
             name = leading.name,
             affectedAreaPct = affectedAreaPct,

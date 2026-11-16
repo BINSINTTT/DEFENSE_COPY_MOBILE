@@ -120,6 +120,9 @@ data class ValidationResponse(
     val isError: Boolean get() = result.equals("Error", ignoreCase = true)
     val hasDiseaseResult: Boolean get() = !topDisease.isNullOrBlank() || !predictions.isNullOrEmpty()
 
+    /** OpenCV severity has not run yet because the phone was offline. */
+    fun awaitingOpenCvSeverity(): Boolean = severityReason == AWAITING_OPENCV_SEVERITY
+
     val confidencePercent: Int?
         get() = confidence?.let { (it * 100).toInt() }
 
@@ -227,6 +230,9 @@ fun diseaseAbbreviation(name: String): String = when {
     name.contains("early blight", ignoreCase = true) -> "EB"
     else -> name.split(" ").take(2).joinToString("") { it.first().uppercaseChar().toString() }
 }
+
+/** Severity is waiting for the online OpenCV measurement. The disease label can still be shown. */
+const val AWAITING_OPENCV_SEVERITY = "awaiting_opencv"
 
 /**
  * Measured affected leaf area selects the Mild/Moderate/Severe band. Never treat
