@@ -76,6 +76,8 @@ data class ValidationResponse(
     val diseaseClasses: List<String>? = null,
     @SerializedName("disease_error")
     val diseaseError: String? = null,
+    @SerializedName("disease_model_configured")
+    val diseaseModelConfigured: Boolean? = null,
     @SerializedName("disease_raw")
     val diseaseRaw: JsonElement? = null,
     @SerializedName("ai_recommendations")
@@ -287,13 +289,6 @@ interface ValidationApiService {
     @POST("classify")
     suspend fun classifyLeaf(
         @Part file: MultipartBody.Part
-    ): Response<JsonElement>
-
-    @Multipart
-    @POST("refine-disease")
-    suspend fun refineDisease(
-        @Part file: MultipartBody.Part,
-        @Part("main_scores") mainScores: RequestBody
     ): Response<JsonElement>
 
     @POST("recommend")

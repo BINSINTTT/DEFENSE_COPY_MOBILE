@@ -208,7 +208,7 @@ private fun ForgotPasswordDialog(
         text = {
             Column {
                 Text(
-                    text = "Enter your email address. We'll send a password reset link to your inbox.",
+                    text = "Enter your email address to request a password reset link.",
                     fontSize = 14.sp,
                     color = Color.Gray
                 )
@@ -250,42 +250,20 @@ private fun ForgotPasswordDialog(
 
                     isSending = true
                     dialogError = null
-                    auth.fetchSignInMethodsForEmail(trimmed)
-                        .addOnCompleteListener { methodsTask ->
-                            if (!methodsTask.isSuccessful) {
-                                isSending = false
-                                val msg = methodsTask.exception?.message.orEmpty()
-                                dialogError = when {
-                                    msg.contains("network error", ignoreCase = true) ||
-                                        msg.contains("timeout", ignoreCase = true) ||
-                                        msg.contains("unreachable host", ignoreCase = true) ->
-                                        "Can't reset password. Check your internet connection"
-                                    else -> methodsTask.exception?.localizedMessage
-                                        ?: "Could not verify email. Please try again."
+                    auth.sendPasswordResetEmail(trimmed)
+                        .addOnCompleteListener { task ->
+                            isSending = false
+                            if (task.isSuccessful) {
+                                onResetSent("If this email has an account, check your inbox and spam folder for a password reset link.")
+                            } else {
+                                val exception = task.exception
+                                dialogError = when (exception) {
+                                    is FirebaseAuthInvalidUserException ->
+                                        "This email is not registered."
+                                    else -> exception?.localizedMessage
+                                        ?: "Could not send reset email. Please try again."
                                 }
-                                return@addOnCompleteListener
                             }
-                            val methods = methodsTask.result?.signInMethods.orEmpty()
-                            if (methods.isEmpty()) {
-                                isSending = false
-                                dialogError = "This email is not registered."
-                                return@addOnCompleteListener
-                            }
-                            auth.sendPasswordResetEmail(trimmed)
-                                .addOnCompleteListener { task ->
-                                    isSending = false
-                                    if (task.isSuccessful) {
-                                        onResetSent("Password reset link sent to $trimmed. Check your inbox.")
-                                    } else {
-                                        val exception = task.exception
-                                        dialogError = when (exception) {
-                                            is FirebaseAuthInvalidUserException ->
-                                                "This email is not registered."
-                                            else -> exception?.localizedMessage
-                                                ?: "Could not send reset email. Please try again."
-                                        }
-                                    }
-                                }
                         }
                 },
                 enabled = !isSending

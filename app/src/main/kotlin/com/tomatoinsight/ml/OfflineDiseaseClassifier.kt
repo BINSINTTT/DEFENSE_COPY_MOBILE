@@ -9,13 +9,14 @@ import java.io.FileInputStream
 import java.nio.channels.FileChannel
 
 /**
- * On-device disease check. Runs only after the leaf validator accepts the photo.
+ * Interim offline disease classifier. Runs only after the leaf validator accepts the photo.
  *
  * tomatoinsightdiseaseclassification.tflite is an Ultralytics classifier:
  * input float32 [1, 3, 640, 640], output float32 [1, 4] after softmax.
  *
  * Class indexes follow Ultralytics' alphabetical training-folder order.
- * Change [CLASS_NAMES] if a known disease scores on the wrong row.
+ * The future object detection TFLite needs its own output decoder and class mapping;
+ * replacing this asset alone is not sufficient.
  */
 object OfflineDiseaseClassifier {
 
@@ -35,8 +36,12 @@ object OfflineDiseaseClassifier {
     fun classify(context: Context, bitmap: android.graphics.Bitmap, leaf: ValidationResponse): ValidationResponse {
         val scores = synchronized(this) {
             val runner = interpreter ?: createInterpreter(context).also { interpreter = it }
-            val classCount = runner.getOutputTensor(0).shape().last().coerceAtLeast(1)
-            val output = Array(1) { FloatArray(classCount) }
+            val outputShape = runner.getOutputTensor(0).shape()
+            require(outputShape.contentEquals(intArrayOf(1, CLASS_NAMES.size))) {
+                "The bundled disease model must have classifier output [1, ${CLASS_NAMES.size}]. " +
+                    "Object detection exports require a detection decoder."
+            }
+            val output = Array(1) { FloatArray(CLASS_NAMES.size) }
             val imgsz = runner.inputImageSize(IMAGE_SIZE)
             runner.run(bitmapToNchw(bitmap, imgsz), output)
             output[0]

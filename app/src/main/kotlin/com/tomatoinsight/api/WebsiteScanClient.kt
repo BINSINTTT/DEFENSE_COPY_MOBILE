@@ -135,50 +135,8 @@ object WebsiteScanClient {
         return readObject(response, route)
     }
 
-    /** Uses the optional fourth model to refine only Early Blight vs Spotted Wilt. */
-    suspend fun withSpecialistRefinement(
-        imageBytes: ByteArray,
-        response: ValidationResponse
-    ): ValidationResponse {
-        if (!response.confirmsTomatoLeaf()) return response
-        val currentScores = response.allDiseaseScores.associate { score ->
-            barKey(score.name) to score.percent.toDouble()
-        }
-        val leading = currentScores.maxByOrNull { it.value }?.key
-        if (leading !in setOf("early_blight", "spotted_wilt")) return response
-
-        return runCatching {
-            val scoreBody = gson.toJson(currentScores).toRequestBody(jsonType)
-            val http = ValidationRetrofitClient.instance.refineDisease(
-                imageBytes.toLeafPart(),
-                scoreBody
-            )
-            val payload = readObject(http, "refine-disease")
-            if (payload.bool("applied") != true) return@runCatching response
-            val refinedObject = payload.getAsJsonObject("scores") ?: return@runCatching response
-            val refinedScores = DISEASE_DISPLAY_ORDER.associateWith { name ->
-                refinedObject.get(barKey(name))?.asDouble?.coerceIn(0.0, 100.0) ?: 0.0
-            }
-            val predictions = DISEASE_DISPLAY_ORDER.map { name ->
-                DiseasePrediction(className = name, confidence = refinedScores.getValue(name) / 100.0)
-            }
-            val top = predictions.maxByOrNull { it.confidence ?: 0.0 }
-            response.copy(
-                predictions = predictions,
-                topDisease = top?.displayName,
-                topDiseaseConfidence = top?.confidence,
-                diseaseClasses = DISEASE_DISPLAY_ORDER,
-                aiRecommendations = null,
-                aiRecommendationError = null,
-                recommendationSource = null,
-                groqModel = null,
-                message = "Early Blight and Spotted Wilt were checked by the specialist model."
-            )
-        }.getOrElse { response }
-    }
-
     /**
-     * Calls Render segmentation `/assess-severity` using the refined top disease class.
+     * Calls Render OpenCV `/assess-severity` using the classified top disease class.
      * Does not use AI confidence. Falls back to Unable to Assess / Healthy 0%.
      */
     suspend fun withSegmentationSeverity(
@@ -421,7 +379,8 @@ object WebsiteScanClient {
     }
 
     private fun barScores(hits: List<Pair<String, Double>>): Map<String, Double> {
-        val byKey = hits.associate { normalizeDiseaseKey(it.first) to it.second }
+        val byKey = hits.groupBy { normalizeDiseaseKey(it.first) }
+            .mapValues { (_, matches) -> matches.maxOf { it.second } }
         fun best(vararg names: String): Double {
             var value = 0.0
             names.forEach { label ->

@@ -62,17 +62,10 @@ fun reminderWeekForPlant(
     if (referenceWeek < nextWeek) return null
 
     val scanIso = scanDayIso?.takeIf { parseScanDay(it) != null }
-        ?: isoFromMillisLocal(scannedAtMillis).takeIf { it.isNotBlank() }
-        .orEmpty()
-    if (scanIso.isNotBlank()) {
-        val waited = daysBetweenIso(scanIso, referenceIso)
-        if (waited != null && waited >= WEEK_DAYS) return nextWeek
-    }
-
-    val sinceAnchor = daysBetweenIso(calendar.anchor, referenceIso)
-    if (sinceAnchor != null && sinceAnchor >= WEEK_DAYS) return nextWeek
-
-    return null
+        ?: scannedAtMillis.takeIf { it > 0 }?.let(::isoFromMillisLocal)
+        ?: return null
+    val waited = daysBetweenIso(scanIso, referenceIso)
+    return if (waited != null && waited >= WEEK_DAYS) nextWeek else null
 }
 
 /** Tiles that still need their next weekly scan, matching website farm-notifications.js. */

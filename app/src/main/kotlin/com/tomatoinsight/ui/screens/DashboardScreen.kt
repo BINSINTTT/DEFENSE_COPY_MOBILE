@@ -68,6 +68,9 @@ import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoRed
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val FarmSkyTop = Color(0xFFFFFBEB)
 private val FarmSkySun = Color(0xFFFEF08A)
@@ -234,6 +237,7 @@ fun DashboardScreen(
         if (result.isHealthy) healthyPlants += 1 else attentionPlants += 1
     }
     val creditText = if (creditsLoaded && creditBalance != null) creditBalance.toString() else "—"
+    val headerDate = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date())
 
     var notifyTile by remember { mutableStateOf<Int?>(null) }
     var deleteTile by remember { mutableStateOf<Int?>(null) }
@@ -321,6 +325,8 @@ fun DashboardScreen(
                             .padding(20.dp)
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
+                            val headerWeek = scanCalendar.resolvedFarmWeek()
+                                ?: selectedFarmWeek.takeIf { it > 0 }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -344,20 +350,56 @@ fun DashboardScreen(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.padding(top = 2.dp)
                                     )
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color.White.copy(alpha = 0.25f),
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (headerWeek != null) "Week $headerWeek" else "● Active",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        )
+                                    }
                                 }
-                                val headerWeek = scanCalendar.resolvedFarmWeek()
-                                    ?: selectedFarmWeek.takeIf { it > 0 }
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color.White.copy(alpha = 0.25f)
-                                ) {
-                                    Text(
-                                        text = if (headerWeek != null) "Week $headerWeek" else "● Active",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color.White.copy(alpha = 0.25f)
+                                    ) {
+                                        Text(
+                                            text = headerDate,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFFFFF7ED),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clickable(
+                                                enabled = internetAvailable,
+                                                onClick = onOpenCreditPlans
+                                            )
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "$creditText Credits",
+                                                color = if (internetAvailable) Color(0xFF8A4B15) else Color(0xFF8B95A7),
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             Row(
@@ -388,26 +430,6 @@ fun DashboardScreen(
                                             modifier = Modifier.padding(top = 4.dp)
                                         )
                                     }
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color.White.copy(
-                                        alpha = if (internetAvailable) 0.25f else 0.14f
-                                    ),
-                                    modifier = Modifier.clickable(
-                                        enabled = internetAvailable,
-                                        onClick = onOpenCreditPlans
-                                    )
-                                ) {
-                                    Text(
-                                        text = "Credit: $creditText",
-                                        color = Color.White.copy(
-                                            alpha = if (internetAvailable) 1f else 0.65f
-                                        ),
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                                    )
                                 }
                             }
                         }

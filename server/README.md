@@ -1,4 +1,4 @@
-# TomatoInsight Server — Stage 1: Tomato Leaf Validation
+# TomatoInsight Server — Tomato Leaf Validation and Disease Detection
 
 Python API for the Android app. It calls your **Roboflow Serverless Workflow** (same as your cURL).
 
@@ -6,7 +6,7 @@ Python API for the Android app. It calls your **Roboflow Serverless Workflow** (
 Kotlin app  →  POST /validate  →  Python (Render)  →  Roboflow Workflow  →  JSON back
 ```
 
-Disease classification is **not** enabled yet.
+Disease detection uses the configured Ultralytics `/predict` deployment after leaf validation. See `../DISEASE_DETECTION_SETUP.md` for the new model handoff and configuration.
 
 ---
 
@@ -143,4 +143,4 @@ Multipart form field: **`file`** (JPEG/PNG image)
 
 ## Next step
 
-When validation is stable, add Stage 2 disease classification in `app.py`.
+After the new model is trained, set its deployment URL and API key as described in `../DISEASE_DETECTION_SETUP.md`.

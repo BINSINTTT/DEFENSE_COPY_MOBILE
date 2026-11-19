@@ -54,7 +54,6 @@ import androidx.compose.ui.unit.sp
 import com.tomatoinsight.api.ImageUploadHelper
 import com.tomatoinsight.api.WebsiteScanClient
 import com.tomatoinsight.ml.OfflineDiseaseClassifier
-import com.tomatoinsight.ml.OfflineEarlySpottedSpecialist
 import com.tomatoinsight.ml.OfflineLeafValidator
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
@@ -159,17 +158,13 @@ fun PlantInfoScreen(
                     if (!shouldUseOnDeviceLeafCheck(e, context)) throw e
                     withContext(Dispatchers.IO) {
                         val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
-                        val leaf = OfflineLeafValidator.validate(context, prepared)
-                        if (leaf.confirmsTomatoLeaf()) {
-                            OfflineDiseaseClassifier.classify(context, prepared, leaf)
-                        } else {
-                            leaf
-                        }
+                        OfflineLeafValidator.validate(context, prepared)
                     }
                 }
-                // Disease bars always come from the same on-device TFLite, so online and
-                // offline scans of the same photo show the same health percentages.
-                val scored = if (response.confirmsTomatoLeaf()) {
+                // Use the server's disease result when available. The bundled classifier
+                // remains the offline fallback until the new detector TFLite is integrated.
+                val scored = if (response.confirmsTomatoLeaf() && response.predictions.isNullOrEmpty() &&
+                    (response.stage == "offline" || response.diseaseModelConfigured != true)) {
                     withContext(Dispatchers.IO) {
                         val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
                         OfflineDiseaseClassifier.classify(context, prepared, response)
@@ -177,37 +172,18 @@ fun PlantInfoScreen(
                 } else {
                     response
                 }
-                // Early blight and spotted wilt share a pattern, so the specialist
-                // segmentation model runs after the four-class disease model.
-                val refined = if (!scored.confirmsTomatoLeaf()) {
-                    scored
-                } else if (OfflineEarlySpottedSpecialist.isAvailable(context)) {
-                    withContext(Dispatchers.IO) {
-                        val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
-                        OfflineEarlySpottedSpecialist.refine(context, prepared, scored)
-                    }
-                } else if (context.hasValidatedInternet()) {
-                    withContext(Dispatchers.IO) {
-                        val bytes = ByteArrayOutputStream().use { stream ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-                            stream.toByteArray()
-                        }
-                        WebsiteScanClient.withSpecialistRefinement(bytes, scored)
-                    }
-                } else {
-                    scored
-                }
                 // OpenCV severity needs the website. Offline scans keep that field blank.
-                val withSeverity = if (refined.confirmsTomatoLeaf() && context.hasValidatedInternet()) {
+                val withSeverity = if (scored.confirmsTomatoLeaf() &&
+                    scored.hasDiseaseResult && context.hasValidatedInternet()) {
                     withContext(Dispatchers.IO) {
                         val bytes = ByteArrayOutputStream().use { stream ->
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
                             stream.toByteArray()
                         }
-                        WebsiteScanClient.withSegmentationSeverity(bytes, refined)
+                        WebsiteScanClient.withSegmentationSeverity(bytes, scored)
                     }
-                } else if (refined.confirmsTomatoLeaf()) {
-                    refined.copy(
+                } else if (scored.confirmsTomatoLeaf() && scored.hasDiseaseResult) {
+                    scored.copy(
                         severityLabel = null,
                         affectedAreaPct = null,
                         severityAssessable = null,
@@ -218,7 +194,7 @@ fun PlantInfoScreen(
                         groqModel = null
                     )
                 } else {
-                    refined
+                    scored
                 }
                 val recommendationReady = withSeverity.ensureGuidesForAllDetections()
                 validationResult = recommendationReady

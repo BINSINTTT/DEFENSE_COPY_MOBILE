@@ -24,4 +24,4 @@ services:
       - key: DISEASE_CLASSES
         value: Early blight,Spotted wilt,Yellow leaf curl virus,Healthy
       - key: DISEASE_MIN_CONFIDENCE
-        value: "0.01"
+        value: "0.25"

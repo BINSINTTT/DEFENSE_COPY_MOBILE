@@ -55,7 +55,7 @@ ROBOFLOW_OVERLAP_PERCENT = int(os.environ.get("ROBOFLOW_OVERLAP_PERCENT", "50"))
 ROBOFLOW_DETECT_PROJECT = os.environ.get("ROBOFLOW_DETECT_PROJECT", "")
 ROBOFLOW_DETECT_VERSION = os.environ.get("ROBOFLOW_DETECT_VERSION", "")
 
-# Stage 2 — Ultralytics Deploy disease classification
+# Stage 2 — Ultralytics Deploy disease detection
 def normalize_ultralytics_url(url: str) -> str:
     cleaned = (url or "").strip().rstrip("/")
     if not cleaned:
@@ -74,8 +74,8 @@ ULTRALYTICS_VALIDATION_URL = normalize_ultralytics_url(
 )
 ULTRALYTICS_VALIDATION_API_KEY = os.environ.get("ULTRALYTICS_VALIDATION_API_KEY", "").strip()
 ULTRALYTICS_REQUEST_RETRIES = int(os.environ.get("ULTRALYTICS_REQUEST_RETRIES", "3"))
-# Low threshold so Ultralytics returns ALL class probabilities, not just the top one.
-DISEASE_MIN_CONFIDENCE = float(os.environ.get("DISEASE_MIN_CONFIDENCE", "0.01"))
+# Detection confidence floor. Classes without a detected box receive a zero score.
+DISEASE_MIN_CONFIDENCE = float(os.environ.get("DISEASE_MIN_CONFIDENCE", "0.25"))
 DISEASE_IMGSZ = int(os.environ.get("DISEASE_IMGSZ", "640"))
 DISEASE_IOU = float(os.environ.get("DISEASE_IOU", "0.7"))
 
@@ -400,7 +400,6 @@ def normalize_disease_key(name: str) -> str:
 
 def append_disease_result(
     results: List[Dict[str, Any]],
-    seen_keys: Set[str],
     name: str,
     confidence: float,
 ) -> None:
@@ -408,9 +407,10 @@ def append_disease_result(
     if not cleaned_name:
         return
     key = normalize_disease_key(cleaned_name)
-    if key in seen_keys:
-        return
-    seen_keys.add(key)
+    for result in results:
+        if normalize_disease_key(result["class"]) == key:
+            result["confidence"] = max(result["confidence"], confidence)
+            return
     results.append(
         {
             "class": cleaned_name,
@@ -421,9 +421,8 @@ def append_disease_result(
 
 
 def extract_disease_predictions(payload: Any) -> List[Dict[str, Any]]:
-    """Parse Ultralytics Deploy /predict JSON into normalized prediction dicts."""
+    """Use the strongest detected box for each class in Deploy /predict JSON."""
     results: List[Dict[str, Any]] = []
-    seen_keys: Set[str] = set()
 
     if not isinstance(payload, dict):
         return results
@@ -442,7 +441,7 @@ def extract_disease_predictions(payload: Any) -> List[Dict[str, Any]]:
                     confidence = normalize_confidence(
                         item.get("confidence", item.get("score", 0))
                     )
-                    append_disease_result(results, seen_keys, name, confidence)
+                    append_disease_result(results, name, confidence)
 
     if isinstance(payload.get("results"), list):
         for item in payload["results"]:
@@ -452,7 +451,15 @@ def extract_disease_predictions(payload: Any) -> List[Dict[str, Any]]:
             confidence = normalize_confidence(
                 item.get("confidence", item.get("score", 0))
             )
-            append_disease_result(results, seen_keys, name, confidence)
+            append_disease_result(results, name, confidence)
+
+    if isinstance(payload.get("predictions"), list):
+        for item in payload["predictions"]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("class_name") or item.get("class") or item.get("label") or "").strip()
+            confidence = normalize_confidence(item.get("confidence", item.get("score", 0)))
+            append_disease_result(results, name, confidence)
 
     results.sort(key=lambda item: item.get("confidence", 0), reverse=True)
     return results
