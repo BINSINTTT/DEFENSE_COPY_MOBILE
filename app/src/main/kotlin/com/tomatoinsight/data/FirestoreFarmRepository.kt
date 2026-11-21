@@ -6,6 +6,7 @@ import android.util.Base64
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
@@ -18,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -134,7 +136,7 @@ private data class WeekSnap(
 
 class FirestoreFarmRepository {
 
-    fun observe(uid: String): Flow<CloudFarmUpdate> = callbackFlow {
+    fun observe(uid: String, requireServer: Boolean): Flow<CloudFarmUpdate> = callbackFlow {
         val db = FirebaseFirestore.getInstance()
         val userRef = db.collection("users").document(uid)
         var user: Map<String, Any>? = null
@@ -146,18 +148,20 @@ class FirestoreFarmRepository {
         var seenDeletions = false
 
         fun publish() {
-            if (!seenUser || !seenTiles || !seenDeletions) return
+            if (error == null && (!seenUser || !seenTiles || !seenDeletions)) return
             trySend(RawCloudBundle(user, tiles, deletions, error))
         }
 
         val registrations = mutableListOf<ListenerRegistration>()
-        registrations += userRef.addSnapshotListener { snapshot, failure ->
+        registrations += userRef.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, failure ->
+            if (requireServer && snapshot?.metadata?.isFromCache == true) return@addSnapshotListener
             if (failure != null) error = firestoreError(failure)
             user = snapshot?.data
             seenUser = true
             publish()
         }
-        registrations += userRef.collection("tiles").addSnapshotListener { snapshot, failure ->
+        registrations += userRef.collection("tiles").addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, failure ->
+            if (requireServer && snapshot?.metadata?.isFromCache == true) return@addSnapshotListener
             if (failure != null) error = firestoreError(failure)
             tiles = snapshot?.documents?.associate { doc ->
                 doc.id to doc.data.orEmpty()
@@ -165,7 +169,8 @@ class FirestoreFarmRepository {
             seenTiles = true
             publish()
         }
-        registrations += userRef.collection("deletions").addSnapshotListener { snapshot, failure ->
+        registrations += userRef.collection("deletions").addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, failure ->
+            if (requireServer && snapshot?.metadata?.isFromCache == true) return@addSnapshotListener
             if (failure != null) error = firestoreError(failure)
             deletions = snapshot?.documents?.map { doc ->
                 doc.data.orEmpty().toMutableMap().apply { put("id", doc.id) }
@@ -175,7 +180,7 @@ class FirestoreFarmRepository {
         }
 
         awaitClose { registrations.forEach { it.remove() } }
-    }.map { bundle ->
+    }.distinctUntilChanged().map { bundle ->
         withContext(Dispatchers.IO) {
             if (bundle.error != null && bundle.user == null && bundle.tiles.isEmpty()) {
                 CloudFarmUpdate(error = bundle.error)
@@ -328,7 +333,7 @@ class FirestoreFarmRepository {
         }
         saveScanCalendar(uid, calendar)
 
-        val cloud = runCatching { fetchFarm(uid) }.getOrDefault(CloudFarm())
+        val cloud = fetchFarm(uid)
         val allDeletions = mergeDeletions(deletions, cloud.deletions)
         val removedTiles = activeDeletedTiles(allDeletions, history, cloud.history)
         val mergedHistory = mergeScanHistories(history, cloud.history, removedTiles)

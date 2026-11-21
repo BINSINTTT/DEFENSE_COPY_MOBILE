@@ -9,24 +9,40 @@ import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
+class ScanAnotherLeafException(message: String) : IOException(message)
+
 /**
- * Talks to the live website API. `/validate` already runs the same Ultralytics
- * leaf model, disease model, and care text as the website.
+ * Uses the website's validation, classification and severity routes in order.
  */
 object WebsiteScanClient {
     private const val LEAF_MIN_CONFIDENCE = 0.50
+    private const val DISEASE_MIN_CONFIDENCE = 0.20
     private val gson = Gson()
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun scan(imageBytes: ByteArray): ValidationResponse {
+    suspend fun scan(imageBytes: ByteArray, onStage: suspend (String) -> Unit = {}): ValidationResponse {
         val payload = postFile("validate") { imageBytes.toLeafPart() }
-        parseFlaskValidation(payload)?.let { return it }
+        parseFlaskValidation(payload)?.let { verdict ->
+            if (!verdict.confirmsTomatoLeaf()) return verdict.copy(predictions = emptyList())
+            onStage("Isolating leaf and detecting disease…")
+            val detection = diseasePredictionsFrom(imageBytes)
+            return tomatoResponse(
+                leafName = verdict.detectedClass ?: "TomatoLeaf",
+                leafConfidence = verdict.confidence ?: 1.0,
+                minConfidence = verdict.minConfidence ?: 0.0,
+                stage = "website",
+                message = "Tomato leaf detected.",
+                predictions = detection.first,
+                leafMaskPng = detection.second
+            )
+        }
 
         val leafHits = extractHits(payload)
         val bestLeaf = leafHits.maxByOrNull { it.second }
         val leafName = bestLeaf?.first
         val leafConfidence = bestLeaf?.second ?: 0.0
         val isTomato = leafName != null &&
+            !isRejectedLeafClass(leafName) &&
             isTomatoLeafClass(leafName) &&
             leafConfidence >= LEAF_MIN_CONFIDENCE
 
@@ -47,13 +63,16 @@ object WebsiteScanClient {
             )
         }
 
+        onStage("Isolating leaf and detecting disease…")
+        val detection = diseasePredictionsFrom(imageBytes)
         return tomatoResponse(
             leafName = leafName,
             leafConfidence = leafConfidence,
             minConfidence = LEAF_MIN_CONFIDENCE,
             stage = "website",
             message = "Tomato leaf detected.",
-            predictions = diseasePredictionsFrom(payload, imageBytes)
+            predictions = detection.first,
+            leafMaskPng = detection.second
         )
     }
 
@@ -68,7 +87,15 @@ object WebsiteScanClient {
             return null
         }
         val parsed = gson.fromJson(payload, ValidationResponse::class.java)
-        val minConfidence = parsed.minConfidence ?: LEAF_MIN_CONFIDENCE
+        val explicitlyRejected = listOf(parsed.result, parsed.detectedClass)
+            .any { it != null && isRejectedLeafClass(it) }
+        if (explicitlyRejected) return parsed.copy(
+            result = "NotTomato",
+            message = "This image was identified as not a tomato leaf. Please upload a clear photo of a tomato leaf.",
+            predictions = emptyList()
+        )
+        // The website trusts a legacy server's final TomatoLeaf verdict.
+        val minConfidence = 0.0
         return parsed.copy(
             minConfidence = minConfidence,
             aiRecommendations = null,
@@ -77,17 +104,12 @@ object WebsiteScanClient {
         )
     }
 
-    private suspend fun diseasePredictionsFrom(
-        payload: JsonObject,
-        imageBytes: ByteArray
-    ): List<DiseasePrediction> {
-        val fromValidate = extractHits(payload, includePredictions = true)
-        if (fromValidate.any { barKeyOrNull(it.first) != null }) {
-            return hitsToPredictions(fromValidate)
+    private suspend fun diseasePredictionsFrom(imageBytes: ByteArray): Pair<List<DiseasePrediction>, String?> {
+        val payload = postFile("classify") { imageBytes.toLeafPart() }
+        val hits = extractHits(payload).filter {
+            it.second >= DISEASE_MIN_CONFIDENCE && barKeyOrNull(it.first) != null
         }
-        return runCatching {
-            hitsToPredictions(extractHits(postFile("classify") { imageBytes.toLeafPart() }))
-        }.getOrDefault(emptyList())
+        return hitsToPredictions(hits) to payload.text("leaf_mask_png")
     }
 
     private suspend fun tomatoResponse(
@@ -96,19 +118,10 @@ object WebsiteScanClient {
         minConfidence: Double,
         stage: String,
         message: String,
-        predictions: List<DiseasePrediction>
+        predictions: List<DiseasePrediction>,
+        leafMaskPng: String? = null
     ): ValidationResponse {
-        val scores = barScores(predictions.map { (it.displayName ?: "") to (it.confidence ?: 0.0) })
-        val mapped = if (predictions.isNotEmpty()) {
-            predictions
-        } else {
-            DISEASE_DISPLAY_ORDER.map { name ->
-                DiseasePrediction(
-                    className = name,
-                    confidence = (scores[barKey(name)] ?: 0.0) / 100.0
-                )
-            }
-        }
+        val mapped = predictions
         val top = mapped.maxByOrNull { it.confidence ?: 0.0 }
         return ValidationResponse(
             result = "TomatoLeaf",
@@ -120,7 +133,8 @@ object WebsiteScanClient {
             predictions = mapped,
             topDisease = top?.displayName,
             topDiseaseConfidence = top?.confidence,
-            diseaseClasses = DISEASE_DISPLAY_ORDER
+            diseaseClasses = DISEASE_DISPLAY_ORDER,
+            leafMaskPng = leafMaskPng
         )
     }
 
@@ -152,27 +166,12 @@ object WebsiteScanClient {
                 severityReason = "no_top_disease"
             ).ensureGuidesForAllDetections()
         val barKey = barKeyOrNull(top.name) ?: "early_blight"
-        if (isHealthyDisease(top.name) || barKey == "healthy") {
-            val withSeverity = runCatching { mergeSeverity(response, postSeverity(imageBytes, "healthy")) }
-                .getOrElse {
-                    response.copy(
-                        severityLabel = "Healthy",
-                        affectedAreaPct = 0.0,
-                        severityAssessable = true,
-                        severityReason = "classified_healthy_local_fallback"
-                    )
-                }
-            return withSeverityDrivenRecommendation(withSeverity)
+        val withSeverity = try {
+            mergeSeverity(response, postSeverity(imageBytes, barKey, response.leafMaskPng))
+        } catch (e: IOException) {
+            if (response.severityLabel != null || response.affectedAreaPct != null) return response
+            return response.copy(severityReason = AWAITING_OPENCV_SEVERITY)
         }
-        val withSeverity = runCatching { mergeSeverity(response, postSeverity(imageBytes, barKey)) }
-            .getOrElse {
-                response.copy(
-                    severityLabel = "Unable to Assess",
-                    affectedAreaPct = null,
-                    severityAssessable = false,
-                    severityReason = "severity_request_failed"
-                )
-            }
         return withSeverityDrivenRecommendation(withSeverity)
     }
 
@@ -230,18 +229,26 @@ object WebsiteScanClient {
             severityReason = severity.severityReason
         )
 
-    private suspend fun postSeverity(imageBytes: ByteArray, diseaseKey: String): SeverityFields {
+    private suspend fun postSeverity(imageBytes: ByteArray, diseaseKey: String, leafMaskPng: String?): SeverityFields {
+        // Use the website's leaf mask for severity. Disease scores come from the phone.
+        val mask = leafMaskPng ?: try {
+            postFile("classify") { imageBytes.toLeafPart() }.text("leaf_mask_png")
+        } catch (e: IOException) {
+            // OpenCV segments the original image when no mask is supplied.
+            null
+        }
         val diseaseBody = diseaseKey.toRequestBody("text/plain".toMediaType())
         val http = ValidationRetrofitClient.instance.assessSeverity(
             imageBytes.toLeafPart(),
             diseaseBody,
-            diseaseBody
+            diseaseBody,
+            mask?.toRequestBody("text/plain".toMediaType())
         )
         val payload = readObject(http, "assess-severity")
         val label = payload.text("severity") ?: "Unable to Assess"
         val measurable = payload.bool("measurable") == true
         val area = payload.number("affected_area_pct")
-        val isHealthy = diseaseKey == "healthy" || label.equals("Healthy", ignoreCase = true)
+        val isHealthy = measurable && label.equals("Healthy", ignoreCase = true)
         val areaPct = when {
             isHealthy -> area?.coerceIn(0.0, 100.0) ?: 0.0
             measurable && area != null -> area.coerceIn(0.0, 100.0)
@@ -324,7 +331,15 @@ object WebsiteScanClient {
 
     private fun readObject(response: retrofit2.Response<JsonElement>, route: String): JsonObject {
         if (!response.isSuccessful) {
-            throw IOException(errorMessage(response.body(), response.errorBody()?.string(), response.code(), route))
+            val raw = response.errorBody()?.string()
+            val error = runCatching { gson.fromJson(raw, JsonObject::class.java) }.getOrNull()
+            if (route == "classify" && response.code() == 422 &&
+                error?.text("error") == "leaf_isolation_failed") {
+                throw ScanAnotherLeafException(
+                    error.text("message") ?: "Please scan another tomato leaf in bright, even light."
+                )
+            }
+            throw IOException(errorMessage(response.body(), raw, response.code(), route))
         }
         return response.body()?.asObject()
             ?: throw IOException("The website $route response was empty.")
@@ -352,8 +367,21 @@ object WebsiteScanClient {
         includePredictions: Boolean = false
     ): List<Pair<String, Double>> {
         val hits = mutableListOf<Pair<String, Double>>()
+        val metadata = payload.get("metadata")?.asObject()
+        val names = metadata?.get("classNames") ?: metadata?.get("names") ?: payload.get("names")
         fun add(item: JsonObject) {
-            val name = item.text("name") ?: item.text("class_name") ?: item.text("class") ?: item.text("label")
+            val classId = item.text("class_id") ?: item.text("classId")
+            val mapped = classId?.let { id ->
+                when {
+                    names?.isJsonObject == true -> names.asJsonObject.get(id)?.asString
+                    names?.isJsonArray == true -> id.toIntOrNull()
+                        ?.takeIf { it in 0 until names.asJsonArray.size() }
+                        ?.let { names.asJsonArray.get(it).asString }
+                    else -> null
+                }
+            }
+            val name = item.text("name") ?: item.text("class_name") ?: item.text("class")
+                ?: item.text("label") ?: mapped
             if (name.isNullOrBlank()) return
             val confidence = item.number("confidence") ?: item.number("score") ?: 0.0
             hits += name to if (confidence > 1.0) confidence / 100.0 else confidence
@@ -369,6 +397,7 @@ object WebsiteScanClient {
     }
 
     private fun hitsToPredictions(hits: List<Pair<String, Double>>): List<DiseasePrediction> {
+        if (hits.isEmpty()) return emptyList()
         val scores = barScores(hits)
         return DISEASE_DISPLAY_ORDER.map { name ->
             DiseasePrediction(
@@ -417,16 +446,13 @@ object WebsiteScanClient {
 
     private fun isTomatoLeafClass(name: String): Boolean {
         val key = normalizeDiseaseKey(name)
-        if (
-            key.isBlank() ||
-            key.contains("nontomato") ||
-            key.contains("nottomato") ||
-            key.contains("nonleaf") ||
-            key.contains("notleaf")
-        ) {
-            return false
-        }
-        return key == "tomatoleaf" || (key.contains("tomato") && key.contains("leaf"))
+        return !isRejectedLeafClass(name) && (key == "tomatoleaf" || key == "tomatoleaves")
+    }
+
+    private fun isRejectedLeafClass(name: String): Boolean {
+        val key = normalizeDiseaseKey(name)
+        return key.contains("nontomato") || key.contains("nottomato") ||
+            key.contains("nonleaf") || key.contains("notleaf")
     }
 
     private fun JsonElement.asObject(): JsonObject? = if (isJsonObject) asJsonObject else null

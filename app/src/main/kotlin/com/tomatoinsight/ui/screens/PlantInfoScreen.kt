@@ -53,8 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tomatoinsight.api.ImageUploadHelper
 import com.tomatoinsight.api.WebsiteScanClient
-import com.tomatoinsight.ml.OfflineDiseaseClassifier
-import com.tomatoinsight.ml.OfflineLeafValidator
+import com.tomatoinsight.api.ScanAnotherLeafException
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
 import com.tomatoinsight.api.AWAITING_OPENCV_SEVERITY
@@ -109,8 +108,10 @@ fun PlantInfoScreen(
     var showLeafReminder by remember { mutableStateOf(false) }
     var showLeafCamera by remember { mutableStateOf(false) }
     var isValidating by remember { mutableStateOf(false) }
+    var scanStage by remember { mutableStateOf("Checking tomato leaf…") }
     var validationResult by remember(tileNumber) { mutableStateOf(savedResult) }
     var validationError by remember { mutableStateOf<String?>(null) }
+    var validationErrorTitle by remember { mutableStateOf("Connection Error") }
     var isSavedScan by remember(tileNumber) { mutableStateOf(savedResult != null) }
     var hasPendingSave by remember(tileNumber) { mutableStateOf(false) }
     var showIntervention by remember(tileNumber, savedScores) {
@@ -140,41 +141,21 @@ fun PlantInfoScreen(
     fun validateTomatoLeaf(bitmap: Bitmap) {
         scope.launch {
             isValidating = true
+            scanStage = "Checking tomato leaf…"
             validationResult = null
             validationError = null
+            validationErrorTitle = "Connection Error"
             showIntervention = false
             awaitingRecommendation = false
             showOfflineRecommendationAlert = false
             try {
-                val response = try {
-                    withTimeout(300_000L) {
-                        ImageUploadHelper.validateTomatoLeaf(context, bitmap)
-                    }
-                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                    throw e
-                } catch (e: HttpException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (!shouldUseOnDeviceLeafCheck(e, context)) throw e
-                    withContext(Dispatchers.IO) {
-                        val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
-                        OfflineLeafValidator.validate(context, prepared)
-                    }
-                }
-                // Use the server's disease result when available. The bundled classifier
-                // remains the offline fallback until the new detector TFLite is integrated.
-                val scored = if (response.confirmsTomatoLeaf() && response.predictions.isNullOrEmpty() &&
-                    (response.stage == "offline" || response.diseaseModelConfigured != true)) {
-                    withContext(Dispatchers.IO) {
-                        val prepared = ImageUploadHelper.bitmapForOnDeviceScan(bitmap)
-                        OfflineDiseaseClassifier.classify(context, prepared, response)
-                    }
-                } else {
-                    response
+                val scored = ImageUploadHelper.validateTomatoLeaf(context, bitmap) { stage ->
+                    withContext(Dispatchers.Main) { scanStage = stage }
                 }
                 // OpenCV severity needs the website. Offline scans keep that field blank.
                 val withSeverity = if (scored.confirmsTomatoLeaf() &&
                     scored.hasDiseaseResult && context.hasValidatedInternet()) {
+                    scanStage = "Measuring symptom severity…"
                     withContext(Dispatchers.IO) {
                         val bytes = ByteArrayOutputStream().use { stream ->
                             bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
@@ -198,8 +179,7 @@ fun PlantInfoScreen(
                 }
                 val recommendationReady = withSeverity.ensureGuidesForAllDetections()
                 validationResult = recommendationReady
-                val leafOnly = recommendationReady.stage == "offline" && !recommendationReady.hasDiseaseResult
-                hasPendingSave = recommendationReady.confirmsTomatoLeaf() && !leafOnly
+                hasPendingSave = recommendationReady.confirmsTomatoLeaf() && recommendationReady.hasDiseaseResult
                 showNotTomatoAlert = !recommendationReady.isError && !recommendationReady.confirmsTomatoLeaf()
                 Log.d(
                     "TomatoInsight",
@@ -207,6 +187,9 @@ fun PlantInfoScreen(
                         "disease=${recommendationReady.topDisease} severity=${recommendationReady.severityLabel} " +
                         "area=${recommendationReady.affectedAreaPct} mode=${recommendationReady.inferenceMode}"
                 )
+            } catch (e: ScanAnotherLeafException) {
+                validationErrorTitle = "Scan another leaf"
+                validationError = e.message ?: "Please scan another tomato leaf in bright, even light."
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e("TomatoInsight", "Validation timed out", e)
                 validationError =
@@ -323,10 +306,8 @@ fun PlantInfoScreen(
         validationResult?.hasDiseaseResult != true
     val displayResult = when {
         isValidating || showNotTomatoAlert || leafOnlyOffline -> null
-        validationResult?.hasAiRecommendations == true &&
-            validationResult?.confirmsTomatoLeaf() == true -> validationResult
-        hasPendingSave && validationResult?.confirmsTomatoLeaf() == true -> validationResult
-        savedClassification -> savedScores.asSavedValidationResponse()
+        validationResult?.confirmsTomatoLeaf() == true && validationResult?.hasDiseaseResult == true -> validationResult
+        isSavedScan && savedClassification -> savedScores.asSavedValidationResponse()
         validationResult?.confirmsTomatoLeaf() == true -> validationResult
         else -> null
     }
@@ -580,6 +561,18 @@ fun PlantInfoScreen(
                             }
                         }
                     )
+                    if (isValidating) {
+                        Column(
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .background(Color.White.copy(alpha = 0.9f))
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = TomatoGreen)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(scanStage, color = TomatoGreenDark, fontSize = 13.sp)
+                        }
+                    }
                 }
             }
 
@@ -611,7 +604,7 @@ fun PlantInfoScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    HealthStatusCard(result = displayResult)
+                    HealthStatusCard(result = displayResult, loading = isValidating, stage = scanStage)
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -642,7 +635,7 @@ fun PlantInfoScreen(
                         ) {
                             validationError?.let { error ->
                                 ValidationResultCard(
-                                    title = "Connection Error",
+                                    title = validationErrorTitle,
                                     message = error,
                                     isSuccess = false
                                 )
@@ -654,10 +647,9 @@ fun PlantInfoScreen(
                                     displayResult != null -> Unit
                                     result.confirmsTomatoLeaf() && !result.hasDiseaseResult -> {
                                         ValidationResultCard(
-                                            title = "Tomato leaf detected",
-                                            message = result.message
-                                                ?: "This photo passed the on-phone leaf check.",
-                                            isSuccess = true
+                                            title = "Scan another leaf",
+                                            message = "We couldn't identify a disease from this scan. Please scan another tomato leaf in bright, even light.",
+                                            isSuccess = false
                                         )
                                     }
                                     showNotTomatoAlert && !result.isError -> Unit
@@ -904,7 +896,7 @@ fun PlantInfoScreen(
             }
             }
         }
-            if (isValidating || isSyncingSeverity) {
+            if (isSyncingSeverity) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -970,18 +962,4 @@ private fun ValidationResultCard(
             )
         }
     }
-}
-
-private fun shouldUseOnDeviceLeafCheck(error: Throwable, context: Context): Boolean {
-    if (!context.hasValidatedInternet()) return true
-    var current: Throwable? = error
-    while (current != null) {
-        when (current) {
-            is java.net.UnknownHostException,
-            is java.net.ConnectException,
-            is java.net.SocketTimeoutException -> return true
-        }
-        current = current.cause
-    }
-    return false
 }

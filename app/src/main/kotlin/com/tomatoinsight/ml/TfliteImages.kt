@@ -12,10 +12,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * RGB 0–1, channels-first input used by both Ultralytics classifiers.
+ * RGB 0–1, channels-first input used by the leaf classifier and disease detector.
  *
- * Uses ClassifyLetterBox (pad 114): same full-frame resize/pad Ultralytics applies
- * when Deploy is called with imgsz, so on-device pixels stay closer to the cloud path.
+ * Preserves aspect ratio and pads with 114 to match Ultralytics preprocessing.
  */
 internal fun bitmapToNchw(bitmap: Bitmap, size: Int): ByteBuffer {
     val squared = ultralyticsLetterBox(bitmap, size)

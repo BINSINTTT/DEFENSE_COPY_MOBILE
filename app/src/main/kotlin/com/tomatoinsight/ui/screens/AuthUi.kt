@@ -73,6 +73,7 @@ private val AuthInsightWord = TomatoGreen
 private const val AUTH_PREFS = "tomatoinsight_auth"
 private const val KEY_REMEMBER = "remember_email"
 private const val KEY_SAVED_EMAIL = "saved_email"
+private const val KEY_REMEMBERED_UID = "remembered_uid"
 
 fun readRememberedEmail(context: Context): Pair<Boolean, String> {
     val prefs = context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
@@ -81,10 +82,28 @@ fun readRememberedEmail(context: Context): Pair<Boolean, String> {
     return remember to email
 }
 
-fun persistRememberedEmail(context: Context, remember: Boolean, email: String) {
+internal fun canResumeRememberedAccount(context: Context, uid: String, email: String?): Boolean {
+    val prefs = context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
+    val (enabled, savedEmail) = readRememberedEmail(context)
+    val rememberedUid = prefs.getString(KEY_REMEMBERED_UID, null)
+    val resume = matchesRememberedAccount(enabled, rememberedUid, savedEmail, uid, email)
+    if (resume && rememberedUid == null) prefs.edit().putString(KEY_REMEMBERED_UID, uid).apply()
+    return resume
+}
+
+internal fun matchesRememberedAccount(
+    enabled: Boolean, rememberedUid: String?, savedEmail: String, uid: String, email: String?
+): Boolean = enabled && when {
+    rememberedUid != null -> rememberedUid == uid
+    // Earlier versions only stored the email alongside the checkbox.
+    else -> savedEmail.isNotBlank() && savedEmail.equals(email, ignoreCase = true)
+}
+
+fun persistRememberedAccount(context: Context, remember: Boolean, email: String, uid: String) {
     context.getSharedPreferences(AUTH_PREFS, Context.MODE_PRIVATE)
         .edit()
         .putBoolean(KEY_REMEMBER, remember)
+        .putString(KEY_REMEMBERED_UID, if (remember) uid else null)
         .putString(KEY_SAVED_EMAIL, if (remember) email.trim() else "")
         .apply()
 }

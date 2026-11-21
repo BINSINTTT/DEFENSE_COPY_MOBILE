@@ -99,7 +99,8 @@ data class ValidationResponse(
     @SerializedName("severity_assessable")
     val severityAssessable: Boolean? = null,
     @SerializedName("severity_reason")
-    val severityReason: String? = null
+    val severityReason: String? = null,
+    @Transient val leafMaskPng: String? = null
 ) {
     val hasAiRecommendations: Boolean
         get() = !aiRecommendations?.sections.isNullOrEmpty()
@@ -301,6 +302,7 @@ interface ValidationApiService {
     suspend fun assessSeverity(
         @Part file: MultipartBody.Part,
         @Part("disease") disease: RequestBody,
-        @Part("bar_key") barKey: RequestBody
+        @Part("bar_key") barKey: RequestBody,
+        @Part("leaf_mask_png") leafMaskPng: RequestBody?
     ): Response<JsonElement>
 }

@@ -31,7 +31,6 @@ import com.tomatoinsight.api.diseaseAbbreviation
 import com.tomatoinsight.api.diseaseDisplayLabel
 import com.tomatoinsight.api.diseaseSeverityLabel
 import com.tomatoinsight.api.isHealthyDisease
-import com.tomatoinsight.api.AWAITING_OPENCV_SEVERITY
 
 private val PanelWhite = Color.White
 private val CardLight = Color(0xFFF3F4F6)
@@ -47,7 +46,11 @@ private val SevereSeverity = Color(0xFF9B2B26)
 private val UnableSeverity = Color(0xFF6B7280)
 
 @Composable
-fun HealthStatusCard(result: ValidationResponse? = null) {
+fun HealthStatusCard(result: ValidationResponse? = null, loading: Boolean = false, stage: String = "Checking tomato leaf…") {
+    if (loading) {
+        HealthStatusSkeleton(stage)
+        return
+    }
     val scores = result?.allDiseaseScores ?: DISEASE_DISPLAY_ORDER.map { name ->
         DiseaseScore(
             name = name,
@@ -57,28 +60,14 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
     }
     val filled = result != null
     val leading = if (filled) scores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 } else null
-    val confidence = leading?.percent
-    val isHealthy = leading != null && isHealthyDisease(leading.name)
-    val awaitingSeverity = result?.severityReason == AWAITING_OPENCV_SEVERITY
-    val affectedAreaPct = when {
-        awaitingSeverity -> null
-        leading == null -> null
-        isHealthy -> result?.affectedAreaPct ?: 0.0
-        result?.severityAssessable == true -> result.affectedAreaPct
-        else -> result?.affectedAreaPct
-    }
     val severity = when {
-        leading == null || awaitingSeverity -> "—"
-        else -> diseaseSeverityLabel(
-            name = leading.name,
-            affectedAreaPct = affectedAreaPct,
-            explicitLabel = result?.severityLabel
-        ).let { label ->
-            if (isHealthy && (label.isBlank() || label == "Unable to Assess")) "Healthy" else label
-        }
+        leading == null || result == null || result.awaitingOpenCvSeverity() -> "—"
+        result.severityAssessable == false -> "Unable to Assess"
+        result.severityLabel.isNullOrBlank() && result.affectedAreaPct == null -> "—"
+        else -> diseaseSeverityLabel(leading.name, result.affectedAreaPct, result.severityLabel)
     }
     val diseaseTitle = when {
-        leading == null -> "Waiting for scan"
+        leading == null -> "—"
         else -> detectedDiseaseTitle(leading.name)
     }
 
@@ -93,30 +82,13 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
                 .fillMaxWidth()
                 .padding(horizontal = 18.dp, vertical = 20.dp)
         ) {
-            Text(
-                text = "Detected Disease",
-                color = LabelGray,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = diseaseTitle,
-                color = TitleInk,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                lineHeight = 30.sp
-            )
-
-            Spacer(modifier = Modifier.height(18.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MetricCard(
-                    label = "AI Confidence",
-                    value = if (confidence != null) "$confidence%" else "—",
+                    label = "Detected Disease",
+                    value = diseaseTitle,
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
@@ -141,6 +113,54 @@ fun HealthStatusCard(result: ValidationResponse? = null) {
             }
         }
     }
+}
+
+@Composable
+private fun HealthStatusSkeleton(stage: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = PanelWhite)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp)) {
+            Text(stage, color = HealthySeverity, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                repeat(2) {
+                    Column(
+                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                            .background(CardLight).padding(14.dp)
+                    ) {
+                        SkeletonLine(0.6f, 10)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SkeletonLine(0.85f, 18)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            SkeletonLine(0.35f, 10)
+            Spacer(modifier = Modifier.height(12.dp))
+            repeat(4) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(CardLight).padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SkeletonLine(0.23f, 12)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    SkeletonLine(0.65f, 12)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkeletonLine(fraction: Float, height: Int) {
+    Box(
+        modifier = Modifier.fillMaxWidth(fraction).height(height.dp)
+            .clip(RoundedCornerShape(6.dp)).background(Color(0xFFDEE3DE))
+    )
 }
 
 @Composable
@@ -169,10 +189,10 @@ private fun MetricCard(
         Text(
             text = value,
             color = valueColor,
-            fontSize = 18.sp,
+            fontSize = if (label == "Detected Disease") 14.sp else 18.sp,
             fontWeight = FontWeight.Bold,
             textAlign = TextAlign.Center,
-            maxLines = 2,
+            maxLines = 3,
             lineHeight = 22.sp
         )
     }

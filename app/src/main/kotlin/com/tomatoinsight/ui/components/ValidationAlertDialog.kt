@@ -86,7 +86,7 @@ fun InvalidLeafValidationDialog(
                     .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 16.dp)
             ) {
                 Text(
-                    text = "Invalid Image",
+                    text = if (highlightReason == "not-leaf") "Not a tomato leaf" else "Invalid Image",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = InvalidTitle

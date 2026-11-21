@@ -123,8 +123,14 @@ fun LoginScreen(
                 auth.signInWithEmailAndPassword(trimmedEmail, password)
                     .addOnCompleteListener { task ->
                         if (task.isSuccessful) {
-                            val user = auth.currentUser
-                            if (user != null && !user.isEmailVerified) {
+                            val user = task.result?.user
+                            if (user == null) {
+                                isLoading = false
+                                error = "Could not open your account. Please sign in again."
+                                return@addOnCompleteListener
+                            }
+                            persistRememberedAccount(context, rememberMe, user.email ?: trimmedEmail, user.uid)
+                            if (!user.isEmailVerified) {
                                 PendingSignupStore.save(
                                     context,
                                     PendingSignup(
@@ -142,7 +148,6 @@ fun LoginScreen(
                                 return@addOnCompleteListener
                             }
                             isLoading = false
-                            persistRememberedEmail(context, rememberMe, trimmedEmail)
                             PendingSignupStore.clear(context)
                             onLoginSuccess()
                         } else {

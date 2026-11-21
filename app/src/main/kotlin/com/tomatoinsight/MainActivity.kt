@@ -73,7 +73,6 @@ import com.tomatoinsight.data.latestFor
 import com.tomatoinsight.data.scansFor
 import com.tomatoinsight.data.activeDeletedTiles
 import com.tomatoinsight.data.asOfIso
-import com.tomatoinsight.data.keepLivePlants
 import com.tomatoinsight.data.keepOfflineOnlyPlants
 import com.tomatoinsight.data.mergeDeletions
 import com.tomatoinsight.data.mergeFarmerProfiles
@@ -106,6 +105,7 @@ import com.tomatoinsight.ui.screens.ProfileScreen
 import com.tomatoinsight.ui.screens.SignupScreen
 import com.tomatoinsight.ui.screens.SplashScreen
 import com.tomatoinsight.ui.screens.VerifyEmailScreen
+import com.tomatoinsight.ui.screens.canResumeRememberedAccount
 import com.tomatoinsight.ui.screens.appRouteAfterSplash
 import com.tomatoinsight.ui.screens.TileMonitorDetailScreen
 import com.tomatoinsight.data.PendingSignupStore
@@ -123,7 +123,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+        // Restore navigation on rotation, but start a new task or process at its auth gate.
+        val recreatingActivity = savedInstanceState?.getString(PROCESS_STATE_KEY) == processId
+        super.onCreate(if (recreatingActivity) savedInstanceState else null)
+        if (!recreatingActivity) {
+            val auth = FirebaseAuth.getInstance()
+            val user = auth.currentUser
+            if (user != null && user.isEmailVerified && !canResumeRememberedAccount(this, user.uid, user.email)) {
+                auth.signOut()
+            }
+        }
         ValidationRetrofitClient.init(this)
         ensureFarmAlertChannel(this)
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
@@ -134,6 +143,11 @@ class MainActivity : ComponentActivity() {
                 TomatoInsightApp()
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(PROCESS_STATE_KEY, processId)
     }
 
     fun requestNotificationPermissionIfNeeded() {
@@ -148,6 +162,9 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val PROCESS_STATE_KEY = "tomatoinsight.activity.process"
+        private val processId = java.util.UUID.randomUUID().toString()
+
         /** Cleared when the app process starts; splash runs once per cold start. */
         var splashFinishedThisProcess: Boolean = false
     }
@@ -172,8 +189,6 @@ fun TomatoInsightApp() {
     var farmerProfile by remember { mutableStateOf(FarmerProfile()) }
     var selectedFarmWeek by remember { mutableIntStateOf(4) }
     var scanCalendar by remember { mutableStateOf(ScanCalendar()) }
-    var farmLoading by remember { mutableStateOf(signedInAtStart != null) }
-    var syncPhase by remember { mutableStateOf(FarmSyncPhase.Idle) }
     var cloudError by remember { mutableStateOf<String?>(null) }
     var accountCredits by remember {
         mutableStateOf(signedInAtStart?.let { creditRepository.visibleAccount(it) })
@@ -196,6 +211,19 @@ fun TomatoInsightApp() {
     var currentUserId by remember {
         mutableStateOf(auth.currentUser?.takeIf { it.isEmailVerified }?.uid)
     }
+
+    var online by remember { mutableStateOf(context.hasValidatedInternet()) }
+    LaunchedEffect(context) {
+        context.observeValidatedInternet().collect { online = it }
+    }
+    var syncAttempt by remember(currentUserId) { mutableIntStateOf(0) }
+    var localLoadError by remember(currentUserId, syncAttempt) { mutableStateOf<String?>(null) }
+    var localFarmReady by remember(currentUserId, syncAttempt) { mutableStateOf(false) }
+    var farmSnapshotApplied by remember(currentUserId, online, syncAttempt) { mutableStateOf(false) }
+    var syncComplete by remember(currentUserId, online, syncAttempt) { mutableStateOf(false) }
+    var syncError by remember(currentUserId, online, syncAttempt) { mutableStateOf<String?>(null) }
+    val farmLoading = currentUserId != null && localLoadError == null && syncError == null &&
+        (!localFarmReady || !farmSnapshotApplied || (online && !syncComplete))
 
     DisposableEffect(auth) {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
@@ -373,18 +401,7 @@ fun TomatoInsightApp() {
         }
     }
 
-    val syncRows by rememberUpdatedState(farmRows)
-    val syncColumns by rememberUpdatedState(farmColumns)
-    val syncNames by rememberUpdatedState(plantNames)
-    val syncRecommendations by rememberUpdatedState(plantRecommendations)
-    val syncProfile by rememberUpdatedState(farmerProfile)
-    val syncCalendar by rememberUpdatedState(scanCalendar)
-    val syncWeek by rememberUpdatedState(selectedFarmWeek)
-    val syncHistory by rememberUpdatedState(tileScanHistory.toMap())
-    val syncDeletions by rememberUpdatedState(farmDeletions)
-    val syncFarmLoading by rememberUpdatedState(farmLoading)
-
-    LaunchedEffect(currentUserId) {
+    LaunchedEffect(currentUserId, syncAttempt) {
         tileScanHistory.clear()
         selectedTile = null
         monitoringTile = null
@@ -399,7 +416,6 @@ fun TomatoInsightApp() {
         selectedFarmWeek = 4
         scanCalendar = ScanCalendar()
         cloudError = null
-        farmLoading = currentUserId != null
 
         val userId = currentUserId
         if (userId == null) {
@@ -409,7 +425,14 @@ fun TomatoInsightApp() {
         // Drop shared reminder cache if another account still owned this device session.
         FarmAccountIsolation.discardForeignSharedCache(context, userId)
 
-        val loaded = farmRepository.loadForUser(userId)
+        val loaded = try {
+            farmRepository.loadForUser(userId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            localLoadError = e.message ?: "Could not load your saved farm."
+            return@LaunchedEffect
+        }
         val localHistory = loaded.history
         val localRows = loaded.rows
         val localColumns = loaded.columns
@@ -423,37 +446,39 @@ fun TomatoInsightApp() {
         // Tag this uid as owner after loading its Room rows (before any cloud upload).
         FarmAccountIsolation.claimOwner(context, userId)
 
-        firestoreFarmRepository.observe(userId).collect { update ->
-            cloudError = update.error
-            val farm = update.farm
-            // Hard cloud failure with no payload — keep the in-memory farm as-is.
-            if (update.error != null && !farm.hasSharedData && farm.history.isEmpty() &&
-                farm.plantNames.isEmpty() && farm.deletions.isEmpty()
-            ) {
-                farmLoading = false
-                return@collect
-            }
-            val disk = farmRepository.loadForUser(userId)
-            val mergedDeletions = mergeDeletions(disk.deletions + syncDeletions, farm.deletions)
-            val memoryHistory = syncHistory.mapValues { it.value.toList() }
-            val localHistoryNow = mergeScanHistories(memoryHistory, disk.history)
-            val localNames = mergePlantNames(
-                local = syncNames,
-                cloud = disk.plantNames,
-                localHistory = memoryHistory,
-                cloudHistory = disk.history
-            )
-            val deletedTiles = activeDeletedTiles(mergedDeletions, localHistoryNow, farm.history)
-            val mergedHistory = mergeScanHistories(localHistoryNow, farm.history, deletedTiles)
-            val mergedNames = mergePlantNames(
-                local = localNames,
-                cloud = farm.plantNames,
-                localHistory = localHistoryNow,
-                cloudHistory = farm.history,
-                deletedTiles = deletedTiles
-            )
-            val (keptHistory, keptNames) = if (update.error == null) {
-                keepOfflineOnlyPlants(
+        localFarmReady = true
+    }
+
+    LaunchedEffect(currentUserId, localFarmReady, online, syncAttempt) {
+        val userId = currentUserId ?: return@LaunchedEffect
+        if (!localFarmReady) return@LaunchedEffect
+        try {
+            firestoreFarmRepository.observe(userId, requireServer = online).collect { update ->
+                if (update.error != null) {
+                    syncError = update.error
+                    return@collect
+                }
+                val farm = update.farm
+                val disk = farmRepository.loadForUser(userId)
+                val mergedDeletions = mergeDeletions(disk.deletions + farmDeletions, farm.deletions)
+                val memoryHistory = tileScanHistory.mapValues { it.value.toList() }
+                val localHistoryNow = mergeScanHistories(memoryHistory, disk.history)
+                val localNames = mergePlantNames(
+                    local = plantNames,
+                    cloud = disk.plantNames,
+                    localHistory = memoryHistory,
+                    cloudHistory = disk.history
+                )
+                val deletedTiles = activeDeletedTiles(mergedDeletions, localHistoryNow, farm.history)
+                val mergedHistory = mergeScanHistories(localHistoryNow, farm.history, deletedTiles)
+                val mergedNames = mergePlantNames(
+                    local = localNames,
+                    cloud = farm.plantNames,
+                    localHistory = localHistoryNow,
+                    cloudHistory = farm.history,
+                    deletedTiles = deletedTiles
+                )
+                val (keptHistory, keptNames) = keepOfflineOnlyPlants(
                     mergedHistory = mergedHistory,
                     mergedNames = mergedNames,
                     localHistory = localHistoryNow,
@@ -462,76 +487,72 @@ fun TomatoInsightApp() {
                     cloudNames = farm.plantNames,
                     deletedTiles = deletedTiles
                 )
-            } else {
-                keepLivePlants(
-                    mergedHistory = mergedHistory,
-                    mergedNames = mergedNames,
+                val mergedRecommendations = mergeRecommendations(
+                    local = plantRecommendations,
+                    cloud = farm.recommendations,
                     localHistory = localHistoryNow,
-                    localNames = localNames,
+                    cloudHistory = farm.history,
                     deletedTiles = deletedTiles
                 )
-            }
-            val mergedRecommendations = mergeRecommendations(
-                local = syncRecommendations,
-                cloud = farm.recommendations,
-                localHistory = localHistoryNow,
-                cloudHistory = farm.history,
-                deletedTiles = deletedTiles
-            )
-            if (farm.rows > 0 && farm.columns > 0) {
-                farmRows = farm.rows
-                farmColumns = farm.columns
-            }
-            plantNames = keptNames
-            plantRecommendations = mergedRecommendations
-            farmDeletions = mergedDeletions
-            val authUser = auth.currentUser
-            val mergedProfile = mergeFarmerProfiles(syncProfile, farm.profile)
-                .withAuthFallback(authUser?.displayName, authUser?.email)
-            if (mergedProfile.displayName.isNotBlank() || mergedProfile.farmName.isNotBlank() ||
-                mergedProfile.photo != null || mergedProfile.email.isNotBlank()
-            ) {
-                farmerProfile = mergedProfile
-            }
-            if (farm.selectedFarmWeek in FIRST_FARM_WEEK..LAST_FARM_WEEK) {
-                selectedFarmWeek = farm.selectedFarmWeek
-            }
-            if (farm.scanCalendar.enabled || farm.scanCalendar.anchor.isNotBlank() ||
-                farm.scanCalendar.selected.isNotBlank() || farm.scanCalendar.nextDue.isNotBlank()
-            ) {
-                scanCalendar = farm.scanCalendar
-            }
+                if (farm.rows > 0 && farm.columns > 0) {
+                    farmRows = farm.rows
+                    farmColumns = farm.columns
+                }
+                plantNames = keptNames
+                plantRecommendations = mergedRecommendations
+                farmDeletions = mergedDeletions
+                val authUser = auth.currentUser
+                val mergedProfile = mergeFarmerProfiles(farmerProfile, farm.profile)
+                    .withAuthFallback(authUser?.displayName, authUser?.email)
+                if (mergedProfile.displayName.isNotBlank() || mergedProfile.farmName.isNotBlank() ||
+                    mergedProfile.photo != null || mergedProfile.email.isNotBlank()
+                ) {
+                    farmerProfile = mergedProfile
+                }
+                if (farm.selectedFarmWeek in FIRST_FARM_WEEK..LAST_FARM_WEEK) {
+                    selectedFarmWeek = farm.selectedFarmWeek
+                }
+                if (farm.scanCalendar.enabled || farm.scanCalendar.anchor.isNotBlank() ||
+                    farm.scanCalendar.selected.isNotBlank() || farm.scanCalendar.nextDue.isNotBlank()
+                ) {
+                    scanCalendar = farm.scanCalendar
+                }
 
-            tileScanHistory.clear()
-            keptHistory.forEach { (tile, scans) ->
-                tileScanHistory[tile] = scans.toMutableList()
+                tileScanHistory.clear()
+                keptHistory.forEach { (tile, scans) ->
+                    tileScanHistory[tile] = scans.toMutableList()
+                }
+                if (selectedTile != null && selectedTile !in keptHistory && selectedTile !in keptNames) {
+                    selectedTile = null
+                    viewingSavedScan = false
+                }
+                if (monitoringTile != null && monitoringTile !in keptHistory) {
+                    monitoringTile = null
+                    monitoringWeek = null
+                }
+                farmRepository.saveForUser(
+                    userId = userId,
+                    rows = farmRows,
+                    columns = farmColumns,
+                    history = tileScanHistory.mapValues { it.value.toList() },
+                    plantNames = plantNames,
+                    deletions = farmDeletions
+                )
+                FarmAccountIsolation.claimOwner(context, userId)
+                refreshScanReminder(
+                    context,
+                    scanCalendar,
+                    farmRows,
+                    farmColumns,
+                    tileScanHistory.mapValues { it.value.toList() },
+                    plantNames
+                )
+                farmSnapshotApplied = true
             }
-            if (selectedTile != null && selectedTile !in keptHistory && selectedTile !in keptNames) {
-                selectedTile = null
-                viewingSavedScan = false
-            }
-            if (monitoringTile != null && monitoringTile !in keptHistory) {
-                monitoringTile = null
-                monitoringWeek = null
-            }
-            farmRepository.saveForUser(
-                userId = userId,
-                rows = farmRows,
-                columns = farmColumns,
-                history = tileScanHistory.mapValues { it.value.toList() },
-                plantNames = plantNames,
-                deletions = farmDeletions
-            )
-            FarmAccountIsolation.claimOwner(context, userId)
-            refreshScanReminder(
-                context,
-                scanCalendar,
-                farmRows,
-                farmColumns,
-                tileScanHistory.mapValues { it.value.toList() },
-                plantNames
-            )
-            farmLoading = false
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncError = e.message ?: "Could not load your farm."
         }
     }
 
@@ -544,7 +565,6 @@ fun TomatoInsightApp() {
             paymentsNote = null
             creditToasts = emptyList()
             showOutOfCredit = false
-            checkoutPack = null
             return@LaunchedEffect
         }
         val cached = creditRepository.visibleAccount(uid)
@@ -596,156 +616,34 @@ fun TomatoInsightApp() {
         }
     }
 
-    LaunchedEffect(currentUserId) {
-        val uid = currentUserId
-        if (uid == null) {
-            syncPhase = FarmSyncPhase.Idle
-            return@LaunchedEffect
-        }
-        var previousOnline: Boolean? = null
-        context.observeValidatedInternet().collect { online ->
-            if (!online) {
-                previousOnline = false
-                return@collect
+    LaunchedEffect(currentUserId, online, farmSnapshotApplied, syncAttempt) {
+        val uid = currentUserId ?: return@LaunchedEffect
+        if (!online || !farmSnapshotApplied) return@LaunchedEffect
+        try {
+            check(FarmAccountIsolation.mayUploadLocalFarm(context, uid)) {
+                "Could not confirm the owner of this farm."
             }
-            val becameOnline = previousOnline != true
-            val restored = previousOnline == false
-            previousOnline = true
-            if (!becameOnline) return@collect
-            var waitedMs = 0
-            while (syncFarmLoading && waitedMs < 8_000) {
-                delay(50)
-                waitedMs += 50
-            }
-            if (restored) syncPhase = FarmSyncPhase.Syncing
-            // Never push another account's leftover in-memory/local farm into this uid.
-            if (!FarmAccountIsolation.mayUploadLocalFarm(context, uid)) {
-                FarmAccountIsolation.discardForeignSharedCache(context, uid)
-                syncPhase = FarmSyncPhase.Idle
-                return@collect
-            }
-            val disk = runCatching { farmRepository.loadForUser(uid) }.getOrNull()
-            val pendingDeletions = mergeDeletions(syncDeletions, disk?.deletions.orEmpty())
-            val memoryHistory = syncHistory.mapValues { it.value.toList() }
-            val localHistory = mergeScanHistories(memoryHistory, disk?.history.orEmpty())
-            val localNames = mergePlantNames(
-                local = syncNames,
-                cloud = disk?.plantNames.orEmpty(),
-                localHistory = memoryHistory,
-                cloudHistory = disk?.history.orEmpty()
+            firestoreFarmRepository.syncLocalFarm(
+                uid = uid, rows = farmRows, columns = farmColumns,
+                plantNames = plantNames, history = tileScanHistory.mapValues { it.value.toList() },
+                profile = farmerProfile, calendar = scanCalendar, week = selectedFarmWeek,
+                deletions = farmDeletions
             )
-            // Pull website tiles first, then upload the merged farm both ways.
-            val cloud = runCatching { firestoreFarmRepository.fetchFarm(uid) }.getOrNull()
-            val cloudHistory = cloud?.history.orEmpty()
-            val cloudNames = cloud?.plantNames.orEmpty()
-            val allDeletions = mergeDeletions(pendingDeletions, cloud?.deletions.orEmpty())
-            val deletedTiles = activeDeletedTiles(allDeletions, localHistory, cloudHistory)
-            val mergedHistory = mergeScanHistories(localHistory, cloudHistory, deletedTiles)
-            val mergedNames = mergePlantNames(
-                local = localNames,
-                cloud = cloudNames,
-                localHistory = localHistory,
-                cloudHistory = cloudHistory,
-                deletedTiles = deletedTiles
-            )
-            val (history, names) = keepOfflineOnlyPlants(
-                mergedHistory = mergedHistory,
-                mergedNames = mergedNames,
-                localHistory = localHistory,
-                localNames = localNames,
-                cloudHistory = cloudHistory,
-                cloudNames = cloudNames,
-                deletedTiles = deletedTiles
-            )
-            tileScanHistory.clear()
-            history.forEach { (tile, scans) ->
-                tileScanHistory[tile] = scans.toMutableList()
-            }
-            plantNames = names
-            farmDeletions = allDeletions
-            val rows = when {
-                (cloud?.rows ?: 0) > 0 -> cloud!!.rows
-                syncRows > 0 -> syncRows
-                else -> disk?.rows ?: 0
-            }
-            val columns = when {
-                (cloud?.columns ?: 0) > 0 -> cloud!!.columns
-                syncColumns > 0 -> syncColumns
-                else -> disk?.columns ?: 0
-            }
-            if (rows > 0 && columns > 0) {
-                farmRows = rows
-                farmColumns = columns
-            }
-            runCatching {
-                farmRepository.saveForUser(
-                    userId = uid,
-                    rows = rows,
-                    columns = columns,
-                    history = history,
-                    plantNames = names,
-                    deletions = allDeletions
-                )
-            }
-            val farmSynced = runCatching {
-                if (!FarmAccountIsolation.mayUploadLocalFarm(context, uid)) {
-                    error("Farm cache is not owned by the signed-in account.")
-                }
-                firestoreFarmRepository.syncLocalFarm(
-                    uid = uid,
-                    rows = rows,
-                    columns = columns,
-                    plantNames = names,
-                    history = history,
-                    profile = syncProfile,
-                    calendar = syncCalendar,
-                    week = syncWeek,
-                    deletions = allDeletions.filter { it.tileNumber in deletedTiles }
-                )
-            }.onSuccess {
-                FarmAccountIsolation.claimOwner(context, uid)
-            }
-            val creditsSynced = runCatching { creditRepository.applyPendingSpends(uid) }
-            creditsSynced.getOrNull()?.let { accountCredits = it.account }
-            if (farmSynced.isSuccess && creditsSynced.isSuccess) {
-                cloudError = null
-                if (restored) {
-                    syncPhase = FarmSyncPhase.Synced
-                    launch {
-                        delay(1_600)
-                        if (syncPhase == FarmSyncPhase.Synced) syncPhase = FarmSyncPhase.Idle
-                    }
-                } else {
-                    syncPhase = FarmSyncPhase.Idle
-                }
-            } else {
-                cloudError = farmSynced.exceptionOrNull()?.message
-                    ?: creditsSynced.exceptionOrNull()?.message
-                    ?: "Could not sync your farm."
-                syncPhase = FarmSyncPhase.Idle
-            }
+            accountCredits = creditRepository.applyPendingSpends(uid).account
+            syncComplete = true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            syncError = e.message ?: "Could not sync your farm."
         }
     }
 
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route
     val pageLoading = currentUserId != null && (farmLoading || !creditsReady)
-    val loadMessage = when (syncPhase) {
-        FarmSyncPhase.Syncing -> "Syncing your farm…"
-        FarmSyncPhase.Synced -> "Farm data synced"
-        FarmSyncPhase.Idle -> if (pageLoading) {
-            when (route) {
-                "monitoring" -> "Loading monitoring…"
-                "history" -> "Loading history…"
-                "profile" -> "Loading your profile…"
-                "plans" -> "Loading credit plans…"
-                "onboarding", "splash" -> null
-                else -> "Loading your farm…"
-            }
-        } else {
-            null
-        }
-    }
+    val loadMessage = if (pageLoading && route !in setOf("onboarding", "splash")) {
+        if (online && farmLoading) "Syncing your farm…" else "Loading your farm…"
+    } else null
 
     fun openSignedOutStart() {
         val next = if (hasSeenOnboarding(context)) "login" else "onboarding"
@@ -859,7 +757,10 @@ fun TomatoInsightApp() {
                 selectedFarmWeek = selectedFarmWeek,
                 scanCalendar = scanCalendar,
                 scanCalendarNote = scanCalendar.dashboardNote(),
-                farmLoading = farmLoading,
+                farmLoading = pageLoading || currentUserId == null,
+                farmUnavailable = localLoadError ?: syncError ?: if (!online && (farmRows == 0 || farmColumns == 0))
+                    "Connect to load your farm layout." else null,
+                onRetrySync = { syncAttempt++ },
                 creditBalance = accountCredits?.balance,
                 creditsLoaded = creditsReady && accountCredits != null,
                 profileBonusGranted = accountCredits?.profileBonusGranted ?: true,
@@ -1379,7 +1280,7 @@ fun TomatoInsightApp() {
         if (currentUserId == null) return@LaunchedEffect
         pushScanReminder()
     }
-    loadMessage?.let { PageLoadOverlay(it, success = syncPhase == FarmSyncPhase.Synced) }
+    loadMessage?.let { PageLoadOverlay(it) }
     Box(modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
         CreditToastHost(
             toasts = creditToasts,

@@ -79,7 +79,7 @@ object OfflineLeafValidator {
         }.joinToString("\n")
         val message = if (accepted) {
             "Tomato leaf detected on this phone (${(tomato!!.second * 100).roundToInt()}%). " +
-                "Disease classification and care recommendations run when the internet is back.\n\n$breakdown"
+            "Disease detection runs on this phone; affected leaf area is measured when the internet is back.\n\n$breakdown"
         } else if (tomato != null && top?.first == tomato.first) {
             "This looks like a tomato leaf, but the score was ${(tomato.second * 100).roundToInt()}%, " +
                 "below the 50% cutoff.\n\n$breakdown"

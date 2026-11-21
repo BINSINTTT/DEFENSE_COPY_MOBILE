@@ -1,5 +1,6 @@
 package com.tomatoinsight.data
 
+import com.tomatoinsight.api.AWAITING_OPENCV_SEVERITY
 import com.tomatoinsight.api.DiseasePrediction
 import com.tomatoinsight.api.DiseaseScore
 import com.tomatoinsight.api.ValidationResponse
@@ -10,6 +11,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SeverityDrivenRecommendationTest {
+
+    @Test
+    fun reopeningSameHealthyScanPreservesPendingOrMeasuredSeverity() {
+        val classified = listOf(DiseaseScore("Healthy", "H", 95)).asSavedValidationResponse()
+        val pending = classified.copy(severityReason = AWAITING_OPENCV_SEVERITY)
+        val assessed = classified.copy(severityLabel = "Healthy", affectedAreaPct = 0.0, severityAssessable = true)
+        fun scan(response: ValidationResponse) = response.toTileScanResult(1)!!.copy(
+            scanId = 1L, scannedAtMillis = 1000L, weekNumber = 4
+        )
+        fun reopen(local: ValidationResponse, cached: ValidationResponse) =
+            mergeScanLists(listOf(scan(local)), listOf(scan(cached))).single().response
+
+        assertTrue(reopen(pending, classified).awaitingOpenCvSeverity())
+        assertEquals(assessed, reopen(assessed, pending))
+        assertEquals(assessed, reopen(pending, assessed))
+        val nextScan = scan(pending).copy(scannedAtMillis = 2000L)
+        assertTrue(mergeScanLists(listOf(scan(assessed)), listOf(nextScan)).single().response.awaitingOpenCvSeverity())
+    }
 
     @Test
     fun onlyTopDiagnosisReceivesCarePlan() {

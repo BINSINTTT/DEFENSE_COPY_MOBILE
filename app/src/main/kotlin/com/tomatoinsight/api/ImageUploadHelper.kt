@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.tomatoinsight.ml.OfflineDiseaseClassifier
+import com.tomatoinsight.ml.OfflineLeafValidator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -20,20 +22,20 @@ object ImageUploadHelper {
         ValidationRetrofitClient.instance.checkHealth()
     }
 
-    suspend fun validateTomatoLeaf(context: Context, bitmap: Bitmap): ValidationResponse =
-        withContext(Dispatchers.IO) {
-            Log.d(TAG, "Validate → ${ValidationRetrofitClient.BASE_URL}validate")
-
-            val imageBytes = prepareImageBytes(bitmap)
-            Log.d(TAG, "Upload size: ${imageBytes.size / 1024} KB")
-            WebsiteScanClient.scan(imageBytes)
+    suspend fun validateTomatoLeaf(context: Context, bitmap: Bitmap, onStage: suspend (String) -> Unit = {}): ValidationResponse =
+        withContext(Dispatchers.Default) {
+            val prepared = bitmapForOnDeviceScan(bitmap)
+            try {
+                val leaf = OfflineLeafValidator.validate(context, prepared)
+                if (!leaf.confirmsTomatoLeaf()) return@withContext leaf
+                onStage("Detecting disease on this phone…")
+                OfflineDiseaseClassifier.classify(context, prepared, leaf)
+            } finally {
+                if (prepared !== bitmap) prepared.recycle()
+            }
         }
 
-    /**
-     * Same JPEG encode/decode the online path uses, so offline TFLite sees
-     * pixels closer to what Ultralytics Deploy receives.
-     */
-    fun bitmapForOnDeviceScan(bitmap: Bitmap): Bitmap {
+    private fun bitmapForOnDeviceScan(bitmap: Bitmap): Bitmap {
         val bytes = prepareImageBytes(bitmap)
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: bitmap.copy(Bitmap.Config.ARGB_8888, false)

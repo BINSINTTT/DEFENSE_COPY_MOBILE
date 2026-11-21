@@ -4,11 +4,14 @@ package com.tomatoinsight.data
 private fun preferredScan(first: TileScanResult, second: TileScanResult): TileScanResult {
     val newer = if (second.scannedAtMillis >= first.scannedAtMillis) second else first
     val older = if (newer === second) first else second
-    return if (newer.image == null && older.image != null) {
-        newer.copy(image = older.image)
-    } else {
-        newer
-    }
+    val sameScan = newer.scannedAtMillis == older.scannedAtMillis && newer.tileNumber == older.tileNumber
+    // A cached copy of the same scan can arrive after its assessment has been saved.
+    val response = if (sameScan && newer.response.severityLabel.isNullOrBlank() &&
+        newer.response.affectedAreaPct == null &&
+        (older.response.affectedAreaPct != null || !older.response.severityLabel.isNullOrBlank() ||
+            older.response.awaitingOpenCvSeverity())
+    ) older.response else newer.response
+    return newer.copy(response = response, image = newer.image ?: older.image)
 }
 
 private fun latestMillis(scans: List<TileScanResult>?): Long =

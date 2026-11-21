@@ -203,6 +203,8 @@ fun DashboardScreen(
     scanCalendar: ScanCalendar = ScanCalendar(),
     scanCalendarNote: String = "",
     farmLoading: Boolean = false,
+    farmUnavailable: String? = null,
+    onRetrySync: () -> Unit = {},
     creditBalance: Int? = null,
     creditsLoaded: Boolean = false,
     profileBonusGranted: Boolean = true,
@@ -499,7 +501,17 @@ fun DashboardScreen(
                             Modifier
                         }
                     )
-            ) {
+            ) blueprint@{
+                if (farmLoading) return@blueprint
+                if (farmUnavailable != null) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(farmUnavailable)
+                        if (internetAvailable) {
+                            TextButton(onClick = onRetrySync) { Text("Retry sync") }
+                        }
+                    }
+                    if (!hasFarmLayout) return@blueprint
+                }
                 FarmBlueprintToolbar(
                     hasLayout = hasFarmLayout,
                     onEditLayout = onNavigateToAddBlueprint,
