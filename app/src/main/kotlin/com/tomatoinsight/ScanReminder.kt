@@ -51,7 +51,7 @@ fun refreshScanReminder(
 
     val asOf = calendar.asOfIso()
     val dueLabel = formatScanDueLabel(asOf)
-    val title = "Information!"
+    val title = "Plant scan reminder"
     val summary = buildNextScanNotificationSummary(dues, plantNames)
     val body = buildNextScanNotificationBody(dues, plantNames)
 
@@ -103,56 +103,32 @@ internal fun buildNextScanNotificationSummary(
     dues: List<DueScanReminder>,
     plantNames: Map<Int, String>
 ): String {
-    val sorted = dues.sortedBy { it.tileNumber }
+    val due = dues.singleOrNull()
     return when {
-        sorted.isEmpty() -> "A plant needs to be scanned again."
-        sorted.size == 1 -> {
-            val due = sorted.first()
-            "${plantDueLabel(due, plantNames)} · Week ${due.nextWeek} needs a scan."
-        }
-        else -> {
-            val first = plantDueLabel(sorted.first(), plantNames)
-            val more = sorted.size - 1
-            "$first and $more more plant${if (more == 1) "" else "s"} need a scan."
-        }
+        due != null -> "Time for the week ${due.nextWeek} scan of ${plantDueLabel(due, plantNames)}."
+        dues.isEmpty() -> "Check your farm for upcoming scans."
+        else -> "${dues.size} plants are due for a scan."
     }
 }
 
-/** Full readable list for the expanded notification. */
 internal fun buildNextScanNotificationBody(
     dues: List<DueScanReminder>,
     plantNames: Map<Int, String>
-): String {
-    val sorted = dues.sortedBy { it.tileNumber }
-    if (sorted.isEmpty()) {
-        return "A plant needs to be scanned again.\n\nOpen TomatoInsight to save it."
-    }
-    if (sorted.size == 1) {
-        val due = sorted.first()
-        return buildString {
-            append(plantDueLabel(due, plantNames))
-            append(" needs Week ")
-            append(due.nextWeek)
-            append(" scanned again.\n\n")
-            append("Open TomatoInsight to save this plant.")
+): String = buildString {
+    if (dues.size <= 1) {
+        append(buildNextScanNotificationSummary(dues, plantNames))
+    } else {
+        append("${dues.size} plants are due for a scan.")
+        dues.sortedBy { it.tileNumber }.forEach { due ->
+            append("\n• ${plantDueLabel(due, plantNames)} · Week ${due.nextWeek}")
         }
     }
-    return buildString {
-        append(sorted.size)
-        append(" plants need another scan:\n")
-        sorted.forEach { due ->
-            append("\n• ")
-            append(plantDueLabel(due, plantNames))
-            append("\n   Week ")
-            append(due.nextWeek)
-        }
-        append("\n\nOpen TomatoInsight to save them.")
-    }
+    append("\n\nTap to open your farm.")
 }
 
 class ScanReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val title = intent.getStringExtra("title") ?: "Information!"
+        val title = intent.getStringExtra("title") ?: "Plant scan reminder"
         val body = intent.getStringExtra("body").orEmpty()
         if (body.isBlank()) return
         val dueLabel = intent.getStringExtra("dueLabel").orEmpty()

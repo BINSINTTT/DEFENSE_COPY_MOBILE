@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
-import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -20,7 +19,7 @@ const val FARM_ALERT_CHANNEL_ID = "farm_alerts"
 
 class FarmAlertMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
-        val title = message.notification?.title ?: message.data["title"] ?: "Information!"
+        val title = message.notification?.title ?: message.data["title"] ?: "Farm update"
         val body = message.notification?.body ?: message.data["body"] ?: return
         showFarmAlert(this, title, body)
     }
@@ -43,7 +42,6 @@ fun ensureFarmAlertChannel(context: Context) {
     manager.createNotificationChannel(channel)
 }
 
-/** Soft pink “Information!” card. Tap opens TomatoInsight. */
 fun showFarmAlert(
     context: Context,
     title: String,
@@ -67,35 +65,14 @@ fun showFarmAlert(
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    val cardTitle = title.ifBlank { "Information!" }.let { raw ->
-        if (raw.contains("scan", ignoreCase = true) || raw.contains("👋")) {
-            "Information!"
-        } else {
-            raw
-        }
-    }
+    val cardTitle = title.trim().takeUnless { it.isBlank() || it.equals("Information!", ignoreCase = true) } ?: "Farm update"
     val cardBody = body.trim().ifBlank { return false }
     val cardSummary = summary.trim().ifBlank {
         cardBody.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().ifBlank { cardBody }
     }
-    val multiLine = cardBody.contains('\n')
-
-    fun bind(views: RemoteViews, text: String, maxLines: Int) {
-        views.setTextViewText(R.id.notification_title, cardTitle)
-        views.setTextViewText(R.id.notification_body, text)
-        views.setInt(R.id.notification_body, "setMaxLines", maxLines)
-    }
-
-    val collapsed = RemoteViews(context.packageName, R.layout.notification_scan_reminder).also {
-        bind(it, cardSummary, if (multiLine) 3 else 4)
-    }
-    val expanded = RemoteViews(context.packageName, R.layout.notification_scan_reminder).also {
-        bind(it, cardBody, 16)
-    }
-
     val notification = NotificationCompat.Builder(context, FARM_ALERT_CHANNEL_ID)
         .setSmallIcon(R.drawable.ic_notification)
-        .setColor(context.getColor(R.color.notification_icon_square))
+        .setColor(context.getColor(R.color.farm_notification_accent))
         .setContentTitle(cardTitle)
         .setContentText(cardSummary)
         .setStyle(
@@ -103,8 +80,6 @@ fun showFarmAlert(
                 .setBigContentTitle(cardTitle)
                 .bigText(cardBody)
         )
-        .setCustomContentView(collapsed)
-        .setCustomBigContentView(expanded)
         .setAutoCancel(true)
         .setPriority(NotificationCompat.PRIORITY_HIGH)
         .setCategory(NotificationCompat.CATEGORY_REMINDER)

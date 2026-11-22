@@ -12,7 +12,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 
-/** Ultralytics diseaseclass03.tflite metadata class indices, in output channel order. */
+/** Ultralytics diseaseclass04.tflite metadata class indices, in output channel order. */
 private val DISEASE_DETECTION_CLASSES = listOf(
     "Early blight",           // 0: early_blight
     "Yellow leaf curl virus", // 1: tlcv
@@ -58,7 +58,7 @@ internal fun decodeDiseaseDetections(output: FloatArray, boxCount: Int): List<Di
 
 /** Runs disease detection after the offline tomato-leaf validator accepts the image. */
 object OfflineDiseaseClassifier {
-    private const val MODEL_ASSET = "models/diseaseclass03.tflite"
+    private const val MODEL_ASSET = "models/diseaseclass04.tflite"
     private const val IMAGE_SIZE = 640
 
     @Volatile

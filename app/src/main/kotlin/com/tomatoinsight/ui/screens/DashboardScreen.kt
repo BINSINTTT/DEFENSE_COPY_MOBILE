@@ -733,8 +733,10 @@ private fun FarmTile(
     val hasSavedPlant = plantName.isNotBlank() || result != null
     val background = tileResultTone(result)
     val labelColor = if (hasResult) Color.White else Color.Black
-    val contentScale = (tileSize.value / 80f).coerceIn(0.35f, 1f)
-    val actionSize = (tileSize * 0.24f).coerceIn(14.dp, 22.dp)
+    val contentScale = (tileSize.value / 80f).coerceAtMost(1f)
+    val actionSize = tileSize * 0.24f
+    val actionInset = tileSize * 0.025f
+    val badgeSize = tileSize * 0.225f
     val emojiSize = (if (hasResult) 30.dp else 26.dp) * contentScale
     Box(modifier = Modifier.size(tileSize)) {
         Surface(
@@ -756,7 +758,7 @@ private fun FarmTile(
                         start = 4.dp * contentScale,
                         end = 4.dp * contentScale,
                         top = if (isSelected && hasSavedPlant) {
-                            actionSize * 0.35f
+                            actionSize + actionInset
                         } else {
                             3.dp * contentScale
                         },
@@ -776,6 +778,7 @@ private fun FarmTile(
                     fontSize = (if (hasResult) 11.sp else 12.sp) * contentScale,
                     fontWeight = FontWeight.Bold,
                     color = labelColor,
+                    lineHeight = 13.sp * contentScale,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
@@ -787,7 +790,7 @@ private fun FarmTile(
             TileActionButton(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(2.dp),
+                    .padding(actionInset),
                 size = actionSize,
                 icon = Icons.Default.Notifications,
                 contentDescription = "Notifications for Tile $tileNumber",
@@ -798,7 +801,7 @@ private fun FarmTile(
             TileActionButton(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(2.dp),
+                    .padding(actionInset),
                 size = actionSize,
                 icon = Icons.Default.Delete,
                 contentDescription = "Delete Tile $tileNumber",
@@ -809,8 +812,8 @@ private fun FarmTile(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(3.dp)
-                    .size((tileSize * 0.28f).coerceIn(14.dp, 18.dp))
+                    .padding(actionInset)
+                    .size(badgeSize)
                     .clip(CircleShape)
                     .background(TomatoRed),
                 contentAlignment = Alignment.Center
@@ -818,9 +821,9 @@ private fun FarmTile(
                 Text(
                     text = notificationCount.coerceAtMost(9).toString(),
                     color = Color.White,
-                    fontSize = (tileSize.value * 0.16f).coerceIn(8f, 11f).sp,
+                    fontSize = (badgeSize.value * 0.6f).sp,
                     fontWeight = FontWeight.Bold,
-                    lineHeight = 10.sp
+                    lineHeight = (badgeSize.value * 0.6f).sp
                 )
             }
         }
@@ -1025,9 +1028,9 @@ private fun TileActionButton(
                 Text(
                     text = badgeCount.coerceAtMost(9).toString(),
                     color = Color.White,
-                    fontSize = (size.value * 0.32f).coerceIn(5f, 11f).sp,
+                    fontSize = (size.value * 0.32f).sp,
                     fontWeight = FontWeight.Bold,
-                    lineHeight = (size.value * 0.32f).coerceIn(5f, 11f).sp
+                    lineHeight = (size.value * 0.32f).sp
                 )
             }
         }
