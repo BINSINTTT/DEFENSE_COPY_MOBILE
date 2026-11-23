@@ -1,51 +1,35 @@
+"""Render the Android launcher icons from the original, uncropped in-app logo."""
 from pathlib import Path
 
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageDraw, ImageOps
 
-src = Path(
-    r"C:\Users\SPARK-PC-05\.cursor\projects\c-Users-SPARK-PC-05-Desktop-TomatoInsightMObileApplication\assets\tomatoinsight_app_icon.jpg"
-)
-res = Path(r"C:\Users\SPARK-PC-05\Desktop\TomatoInsightMObileApplication\app\src\main\res")
-out_master = res / "drawable-nodpi" / "tomatoinsight_logo.png"
-out_fg = res / "drawable" / "ic_launcher_foreground.png"
+res = Path(__file__).resolve().parents[1] / "app/src/main/res"
+with Image.open(res / "drawable-nodpi/tomatoinsight_logo.png") as artwork:
+    logo = artwork.convert("RGBA")
 
-img = Image.open(src).convert("RGB")
-img = ImageEnhance.Color(img).enhance(1.12)
-img = ImageEnhance.Contrast(img).enhance(1.08)
-img = ImageEnhance.Sharpness(img).enhance(1.25)
+background = logo.getpixel((0, 0))
+resampling = Image.Resampling.LANCZOS
 
-w, h = img.size
-side = min(w, h)
-pad = int(side * 0.04)
-left = (w - side) // 2 + pad
-top = (h - side) // 2 + pad
-right = left + side - 2 * pad
-bottom = top + side - 2 * pad
-img = img.crop((left, top, right, bottom))
 
-master = img.resize((1024, 1024), Image.Resampling.LANCZOS)
-out_master.parent.mkdir(parents=True, exist_ok=True)
-master.save(out_master, format="PNG", optimize=True)
+def icon_canvas(size, artwork_width):
+    canvas = Image.new("RGBA", (size, size), background)
+    art = ImageOps.contain(logo, (artwork_width, artwork_width), resampling)
+    canvas.alpha_composite(art, ((size - art.width) // 2, (size - art.height) // 2))
+    return canvas
 
-fg = master.resize((432, 432), Image.Resampling.LANCZOS)
-fg.save(out_fg, format="PNG", optimize=True)
 
-sizes = {
-    "mipmap-mdpi": 48,
-    "mipmap-hdpi": 72,
-    "mipmap-xhdpi": 96,
-    "mipmap-xxhdpi": 144,
-    "mipmap-xxxhdpi": 192,
-}
-for folder, size in sizes.items():
-    d = res / folder
-    d.mkdir(parents=True, exist_ok=True)
-    icon = master.resize((size, size), Image.Resampling.LANCZOS)
-    icon.save(d / "ic_launcher.png", format="PNG", optimize=True)
-    icon.save(d / "ic_launcher_round.png", format="PNG", optimize=True)
+# Android masks the center of a 108 dp adaptive layer. Keep the artwork
+# within the central 66 dp so its leaf and magnifier survive each mask.
+foreground = icon_canvas(432, 264)
+foreground.save(res / "drawable/ic_launcher_foreground.png", optimize=True)
 
-px = master.getpixel((8, 8))
-print("bg_sample", "#{:02X}{:02X}{:02X}".format(*px))
-print("wrote", out_master)
-print("wrote", out_fg)
-print("mipmaps ok")
+square = icon_canvas(576, 540)
+circle = Image.new("L", square.size)
+ImageDraw.Draw(circle).ellipse((0, 0, square.width - 1, square.height - 1), fill=255)
+rounded = square.copy()
+rounded.putalpha(circle)
+
+for density, pixels in {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}.items():
+    directory = res / f"mipmap-{density}"
+    for image, name in [(square, "ic_launcher"), (rounded, "ic_launcher_round")]:
+        image.resize((pixels, pixels), resampling).save(directory / f"{name}.png", optimize=True)

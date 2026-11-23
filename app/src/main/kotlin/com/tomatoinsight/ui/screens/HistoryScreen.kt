@@ -171,7 +171,7 @@ fun HistoryScreen(
         bottomBar = {
             CustomBottomBar(
                 selectedTab = "history",
-                cameraEnabled = true,
+                cameraEnabled = false,
                 onHomeClick = onNavigateToHome,
                 onMonitoringClick = onNavigateToMonitoring,
                 onCameraClick = onCameraClick,
@@ -807,8 +807,8 @@ private fun HistoryDetailDialog(
                                 isLoadingRecommendation -> "Preparing care plan..."
                                 showsRescanGuidance && showCare && internetAvailable -> "Hide rescan guidance"
                                 showsRescanGuidance -> "View rescan guidance"
-                                showCare && internetAvailable -> "Hide care plan"
-                                else -> "View care plan"
+                                showCare && internetAvailable -> "Hide Intervention"
+                                else -> "View Intervention"
                             }
                         )
                     }

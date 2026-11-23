@@ -6,8 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
+import android.graphics.Rect
 import android.media.ExifInterface
 import java.io.File
 
@@ -20,38 +19,14 @@ object CameraCaptureUtils {
     }
 
     fun cropToGuideFrame(source: Bitmap): Bitmap {
-        val cropRect = TomatoLeafShape.cropRect(source.width, source.height)
-        val width = cropRect.width().coerceAtLeast(1)
-        val height = cropRect.height().coerceAtLeast(1)
-
-        val cropped = Bitmap.createBitmap(source, cropRect.left, cropRect.top, width, height)
-        if (cropped != source) {
-            source.recycle()
-        }
-
-        return applyOvalMask(cropped)
-    }
-
-    private fun applyOvalMask(source: Bitmap): Bitmap {
-        val output = Bitmap.createBitmap(
-            source.width,
-            source.height,
-            Bitmap.Config.ARGB_8888
-        )
-        val canvas = Canvas(output)
-        canvas.drawColor(android.graphics.Color.WHITE)
-
-        val path = Path().apply {
-            addOval(
-                RectF(0f, 0f, source.width.toFloat(), source.height.toFloat()),
-                Path.Direction.CW
-            )
-        }
-        canvas.save()
-        canvas.clipPath(path)
-        canvas.drawBitmap(source, 0f, 0f, Paint(Paint.ANTI_ALIAS_FLAG))
-        canvas.restore()
-
+        val bounds = TomatoLeafShape.guideBounds(source.width.toFloat(), source.height.toFloat())
+        val side = bounds.width.toInt().coerceAtLeast(1)
+        val left = bounds.left.toInt()
+        val top = bounds.top.toInt()
+        val region = Rect(left, top, left + side, top + side)
+        val size = LeafCameraGuide.OUTPUT_SIZE
+        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        Canvas(output).drawBitmap(source, region, Rect(0, 0, size, size), Paint(Paint.FILTER_BITMAP_FLAG))
         source.recycle()
         return output
     }

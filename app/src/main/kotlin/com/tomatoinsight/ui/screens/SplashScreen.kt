@@ -65,6 +65,7 @@ fun appRouteAfterSplash(auth: FirebaseAuth, context: Context): String {
                     status = PendingSignup.STATUS_AWAITING_VERIFICATION,
                     firstName = existing?.firstName.orEmpty(),
                     middleName = existing?.middleName.orEmpty(),
+                    nameSuffix = existing?.nameSuffix.orEmpty(),
                     lastName = existing?.lastName.orEmpty()
                 )
             )
@@ -140,7 +141,7 @@ fun SplashScreen(onFinished: () -> Unit) {
                 .alpha(logoAlpha)
         ) {
             Image(
-                painter = painterResource(R.drawable.splash_logo),
+                painter = painterResource(R.drawable.tomatoinsight_logo),
                 contentDescription = "TomatoInsight logo",
                 modifier = Modifier.fillMaxWidth(0.62f),
                 contentScale = ContentScale.Fit

@@ -34,13 +34,12 @@ data class FarmerProfile(
     val lastName: String = "",
     val farmName: String = "",
     val email: String = "",
-    val photo: Bitmap? = null
+    val photo: Bitmap? = null,
+    // Null means the legacy record has no suffix field. An empty string explicitly clears it.
+    val nameSuffix: String? = null
 ) {
     val displayName: String
-        get() = listOf(firstName, middleInitial, lastName)
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" ")
+        get() = ProfileNameParts(firstName, middleInitial, lastName, nameSuffix.orEmpty()).displayName
 }
 
 data class ScanCalendar(
@@ -291,6 +290,7 @@ class FirestoreFarmRepository {
             fields["farmName"] = profile.farmName.trim()
             fields["email"] = profile.email.trim()
         }
+        profile.nameSuffix?.let { fields["nameSuffix"] = normalizeNameSuffix(it) }
         Tasks.await(userRef.set(fields, SetOptions.merge()))
     }
 
@@ -509,6 +509,7 @@ private fun RawCloudBundle.toCloudFarm(): CloudFarm {
             firstName = source["firstName"].asText(),
             middleInitial = source["middleInitial"].asText().take(1),
             lastName = source["lastName"].asText(),
+            nameSuffix = if ("nameSuffix" in source) normalizeNameSuffix(source["nameSuffix"].asText()) else null,
             farmName = source["farmName"].asText(),
             email = source["email"].asText(),
             photo = decodeImageDataUrl(source["photo"].asText())

@@ -100,6 +100,7 @@ import com.tomatoinsight.ui.screens.OnboardingScreen
 import com.tomatoinsight.ui.screens.hasSeenOnboarding
 import com.tomatoinsight.ui.screens.markOnboardingSeen
 import com.tomatoinsight.ui.screens.MonitoringScreen
+import com.tomatoinsight.ui.screens.TileScanDraft
 import com.tomatoinsight.ui.screens.PlantInfoScreen
 import com.tomatoinsight.ui.screens.ProfileScreen
 import com.tomatoinsight.ui.screens.SignupScreen
@@ -212,6 +213,8 @@ fun TomatoInsightApp() {
         mutableStateOf(auth.currentUser?.takeIf { it.isEmailVerified }?.uid)
     }
 
+    val scanDrafts by rememberUpdatedState(remember(currentUserId) { mutableStateMapOf<Int, TileScanDraft>() })
+
     var online by remember { mutableStateOf(context.hasValidatedInternet()) }
     LaunchedEffect(context) {
         context.observeValidatedInternet().collect { online = it }
@@ -223,7 +226,7 @@ fun TomatoInsightApp() {
     var syncComplete by remember(currentUserId, online, syncAttempt) { mutableStateOf(false) }
     var syncError by remember(currentUserId, online, syncAttempt) { mutableStateOf<String?>(null) }
     val farmLoading = currentUserId != null && localLoadError == null && syncError == null &&
-        (!localFarmReady || !farmSnapshotApplied || (online && !syncComplete))
+        (!localFarmReady || (online && (!farmSnapshotApplied || !syncComplete)))
 
     DisposableEffect(auth) {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
@@ -301,6 +304,7 @@ fun TomatoInsightApp() {
     }
 
     fun removePlantTile(tile: Int) {
+        scanDrafts.remove(tile)
         val name = plantNames[tile]?.trim().orEmpty().ifBlank { "Tile $tile" }
         val removed = tileScanHistory.remove(tile).orEmpty()
         val nextNames = plantNames - tile
@@ -469,6 +473,7 @@ fun TomatoInsightApp() {
                     localHistory = memoryHistory,
                     cloudHistory = disk.history
                 )
+                val newDeletions = mergedDeletions.filter { it !in farmDeletions }
                 val deletedTiles = activeDeletedTiles(mergedDeletions, localHistoryNow, farm.history)
                 val mergedHistory = mergeScanHistories(localHistoryNow, farm.history, deletedTiles)
                 val mergedNames = mergePlantNames(
@@ -522,7 +527,10 @@ fun TomatoInsightApp() {
                 keptHistory.forEach { (tile, scans) ->
                     tileScanHistory[tile] = scans.toMutableList()
                 }
-                if (selectedTile != null && selectedTile !in keptHistory && selectedTile !in keptNames) {
+                val newlyDeletedTiles = newDeletions.map { it.tileNumber }.intersect(deletedTiles)
+                val validTiles = 1..(farmRows * farmColumns)
+                scanDrafts.keys.toList().filter { it !in validTiles || it in newlyDeletedTiles }.forEach { scanDrafts.remove(it) }
+                if (selectedTile?.let { it !in validTiles || it in newlyDeletedTiles } == true) {
                     selectedTile = null
                     viewingSavedScan = false
                 }
@@ -601,10 +609,10 @@ fun TomatoInsightApp() {
         }
     }
 
-    LaunchedEffect(currentUserId, farmLoading, creditsReady, accountCredits?.profileBonusGranted) {
+    LaunchedEffect(currentUserId, farmLoading, farmSnapshotApplied, creditsReady, accountCredits?.profileBonusGranted) {
         val uid = currentUserId ?: return@LaunchedEffect
         val credits = accountCredits ?: return@LaunchedEffect
-        if (!creditsReady || farmLoading || credits.profileBonusGranted) return@LaunchedEffect
+        if (!creditsReady || farmLoading || !farmSnapshotApplied || credits.profileBonusGranted) return@LaunchedEffect
         delay(600)
         if (isFarmSetupComplete(farmerProfile, tileCountNow(), scanCountNow(), farmWeekNow())) return@LaunchedEffect
         if (creditRepository.claimToast(uid, "profile")) {
@@ -640,7 +648,13 @@ fun TomatoInsightApp() {
 
     val navEntry by navController.currentBackStackEntryAsState()
     val route = navEntry?.destination?.route
-    val pageLoading = currentUserId != null && (farmLoading || !creditsReady)
+    val pageLoading = currentUserId != null && (farmLoading || (online && !creditsReady))
+    // Destinations in the remembered graph must read the current account's loading and retry state.
+    val dashboardFarmLoading by rememberUpdatedState(currentUserId == null || farmLoading)
+    val dashboardFarmError by rememberUpdatedState(localLoadError ?: syncError ?: if (
+        !online && localFarmReady && (farmRows == 0 || farmColumns == 0)
+    ) "Connect to load your farm layout." else null)
+    val retryFarmSync by rememberUpdatedState<() -> Unit>({ syncAttempt++ })
     val loadMessage = if (pageLoading && route !in setOf("onboarding", "splash")) {
         if (online && farmLoading) "Syncing your farm…" else "Loading your farm…"
     } else null
@@ -749,6 +763,7 @@ fun TomatoInsightApp() {
         }
         composable("dashboard") {
             DashboardScreen(
+                draftTiles = scanDrafts.keys.toSet(),
                 rows = farmRows,
                 columns = farmColumns,
                 farmerName = farmerProfile.displayName,
@@ -757,10 +772,9 @@ fun TomatoInsightApp() {
                 selectedFarmWeek = selectedFarmWeek,
                 scanCalendar = scanCalendar,
                 scanCalendarNote = scanCalendar.dashboardNote(),
-                farmLoading = pageLoading || currentUserId == null,
-                farmUnavailable = localLoadError ?: syncError ?: if (!online && (farmRows == 0 || farmColumns == 0))
-                    "Connect to load your farm layout." else null,
-                onRetrySync = { syncAttempt++ },
+                farmLoading = dashboardFarmLoading,
+                farmUnavailable = dashboardFarmError,
+                onRetrySync = retryFarmSync,
                 creditBalance = accountCredits?.balance,
                 creditsLoaded = creditsReady && accountCredits != null,
                 profileBonusGranted = accountCredits?.profileBonusGranted ?: true,
@@ -785,7 +799,7 @@ fun TomatoInsightApp() {
                     selectedTile = if (selectedTile == tile) null else tile
                 },
                 onTileDoubleTap = { tile ->
-                    if (tileScanHistory.latestFor(tile) != null) {
+                    if (tile in scanDrafts || tileScanHistory.latestFor(tile) != null) {
                         selectedTile = tile
                         viewingSavedScan = true
                         navController.navigate("plant_info")
@@ -1030,6 +1044,7 @@ fun TomatoInsightApp() {
                 onSaveSuccess = { rows, cols ->
                     farmRows = rows
                     farmColumns = cols
+                    scanDrafts.keys.toList().filter { it !in 1..(rows * cols) }.forEach { scanDrafts.remove(it) }
                     persistFarmData()
                     val userId = currentUserId
                     if (userId != null) {
@@ -1075,8 +1090,19 @@ fun TomatoInsightApp() {
             } else {
                 null
             }
+            val tileForDraft = selectedTile
+            val accountDrafts = scanDrafts
             PlantInfoScreen(
-                tileNumber = selectedTile,
+                tileNumber = tileForDraft,
+                initialDraft = tileForDraft?.let { accountDrafts[it] },
+                onDraftChanged = { draft ->
+                    if (tileForDraft != null) {
+                        if (draft == null) accountDrafts.remove(tileForDraft) else {
+                            accountDrafts[tileForDraft] = draft
+                            scope.launch { draft.compactPhoto() }
+                        }
+                    }
+                },
                 savedImage = saved?.image,
                 savedResult = saved?.response,
                 savedScores = saved?.scores.orEmpty(),

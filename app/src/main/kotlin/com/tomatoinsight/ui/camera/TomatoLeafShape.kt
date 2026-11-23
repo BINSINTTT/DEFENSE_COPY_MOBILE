@@ -5,32 +5,13 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import kotlin.math.min
 
-/** Portrait oval scan guide — same bounds for overlay and crop. */
+/** The preview and oriented CameraX viewport crop share this square. */
 object TomatoLeafShape {
-
     fun guideBounds(canvasWidth: Float, canvasHeight: Float): Rect {
-        var width = canvasWidth * LeafCameraGuide.WIDTH_FRACTION
-        var height = width / LeafCameraGuide.ASPECT_RATIO
-        val maxHeight = canvasHeight * LeafCameraGuide.MAX_HEIGHT_FRACTION
-        if (height > maxHeight) {
-            height = maxHeight
-            width = height * LeafCameraGuide.ASPECT_RATIO
-        }
-
-        val left = (canvasWidth - width) / 2f
-        val top = (canvasHeight - height) / 2f - canvasHeight * 0.03f
+        val side = min(canvasWidth * 0.80f, canvasHeight * 0.62f)
         return Rect(
-            offset = Offset(left, top.coerceAtLeast(canvasHeight * 0.10f)),
-            size = Size(width, height)
+            offset = Offset((canvasWidth - side) / 2f, (canvasHeight - side) * 0.40f),
+            size = Size(side, side)
         )
-    }
-
-    fun cropRect(bitmapWidth: Int, bitmapHeight: Int): android.graphics.Rect {
-        val bounds = guideBounds(bitmapWidth.toFloat(), bitmapHeight.toFloat())
-        val left = bounds.left.toInt().coerceAtLeast(0)
-        val top = bounds.top.toInt().coerceAtLeast(0)
-        val right = min(bounds.right.toInt(), bitmapWidth)
-        val bottom = min(bounds.bottom.toInt(), bitmapHeight)
-        return android.graphics.Rect(left, top, right, bottom)
     }
 }

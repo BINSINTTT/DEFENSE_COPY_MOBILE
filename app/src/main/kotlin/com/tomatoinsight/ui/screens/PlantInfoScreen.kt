@@ -3,6 +3,7 @@ package com.tomatoinsight.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.media.ExifInterface
 import android.net.Uri
@@ -84,10 +85,34 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
+/** Session-only photo and result for an unfinished scan on one farm tile. */
+internal class TileScanDraft(bitmap: Bitmap, var name: String) {
+    var result: ValidationResponse? = null
+    private var original: Bitmap? = bitmap
+    private var jpeg: ByteArray? = null
+
+    fun openImage(): Bitmap = original ?: requireNotNull(jpeg).let {
+        BitmapFactory.decodeByteArray(it, 0, it.size)
+    }
+
+    suspend fun compactPhoto() {
+        val image = original ?: return
+        val bytes = withContext(Dispatchers.Default) {
+            ByteArrayOutputStream().use { stream ->
+                if (image.compress(Bitmap.CompressFormat.JPEG, 95, stream)) stream.toByteArray() else null
+            }
+        } ?: return
+        jpeg = bytes
+        original = null
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlantInfoScreen(
+internal fun PlantInfoScreen(
     tileNumber: Int? = null,
+    initialDraft: TileScanDraft? = null,
+    onDraftChanged: (TileScanDraft?) -> Unit = {},
     savedImage: Bitmap? = null,
     savedResult: ValidationResponse? = null,
     savedScores: List<DiseaseScore> = emptyList(),
@@ -103,17 +128,20 @@ fun PlantInfoScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    var capturedImage by remember(tileNumber) { mutableStateOf(savedImage) }
+    var draft by remember(tileNumber) { mutableStateOf(initialDraft) }
+    var capturedImage by remember(tileNumber) { mutableStateOf(initialDraft?.openImage() ?: savedImage) }
     var showSourceSelector by remember { mutableStateOf(false) }
     var showLeafReminder by remember { mutableStateOf(false) }
     var showLeafCamera by remember { mutableStateOf(false) }
     var isValidating by remember { mutableStateOf(false) }
     var scanStage by remember { mutableStateOf("Checking tomato leaf…") }
-    var validationResult by remember(tileNumber) { mutableStateOf(savedResult) }
+    var validationResult by remember(tileNumber) { mutableStateOf(if (initialDraft != null) initialDraft.result else savedResult) }
     var validationError by remember { mutableStateOf<String?>(null) }
     var validationErrorTitle by remember { mutableStateOf("Connection Error") }
-    var isSavedScan by remember(tileNumber) { mutableStateOf(savedResult != null) }
-    var hasPendingSave by remember(tileNumber) { mutableStateOf(false) }
+    var isSavedScan by remember(tileNumber) { mutableStateOf(initialDraft == null && savedResult != null) }
+    var hasPendingSave by remember(tileNumber) {
+        mutableStateOf(initialDraft?.result?.let { it.confirmsTomatoLeaf() && it.hasDiseaseResult } == true)
+    }
     var showIntervention by remember(tileNumber, savedScores) {
         mutableStateOf(
             context.hasValidatedInternet() &&
@@ -126,7 +154,7 @@ fun PlantInfoScreen(
     var isLoadingRecommendation by remember { mutableStateOf(false) }
     var isSyncingSeverity by remember { mutableStateOf(false) }
     var recommendationPendingSave by remember(tileNumber) { mutableStateOf(false) }
-    var plantNameInput by remember(tileNumber) { mutableStateOf(plantName) }
+    var plantNameInput by remember(tileNumber) { mutableStateOf(initialDraft?.name ?: plantName) }
     var isSavingInfo by remember { mutableStateOf(false) }
     val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
         context.observeValidatedInternet().collect { value = it }
@@ -138,89 +166,100 @@ fun PlantInfoScreen(
         }
     }
 
-    fun validateTomatoLeaf(bitmap: Bitmap) {
-        scope.launch {
-            isValidating = true
-            scanStage = "Checking tomato leaf…"
-            validationResult = null
-            validationError = null
-            validationErrorTitle = "Connection Error"
-            showIntervention = false
-            awaitingRecommendation = false
-            showOfflineRecommendationAlert = false
-            try {
-                val scored = ImageUploadHelper.validateTomatoLeaf(context, bitmap) { stage ->
-                    withContext(Dispatchers.Main) { scanStage = stage }
-                }
-                // OpenCV severity needs the website. Offline scans keep that field blank.
-                val withSeverity = if (scored.confirmsTomatoLeaf() &&
-                    scored.hasDiseaseResult && context.hasValidatedInternet()) {
-                    scanStage = "Measuring symptom severity…"
-                    withContext(Dispatchers.IO) {
-                        val bytes = ByteArrayOutputStream().use { stream ->
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
-                            stream.toByteArray()
-                        }
-                        WebsiteScanClient.withSegmentationSeverity(bytes, scored)
-                    }
-                } else if (scored.confirmsTomatoLeaf() && scored.hasDiseaseResult) {
-                    scored.copy(
-                        severityLabel = null,
-                        affectedAreaPct = null,
-                        severityAssessable = null,
-                        severityReason = AWAITING_OPENCV_SEVERITY,
-                        aiRecommendations = null,
-                        aiRecommendationError = null,
-                        recommendationSource = null,
-                        groqModel = null
-                    )
-                } else {
-                    scored
-                }
-                val recommendationReady = withSeverity.ensureGuidesForAllDetections()
-                validationResult = recommendationReady
-                hasPendingSave = recommendationReady.confirmsTomatoLeaf() && recommendationReady.hasDiseaseResult
-                showNotTomatoAlert = !recommendationReady.isError && !recommendationReady.confirmsTomatoLeaf()
-                Log.d(
-                    "TomatoInsight",
-                    "Validation result=${recommendationReady.result}, class=${recommendationReady.detectedClass}, " +
-                        "disease=${recommendationReady.topDisease} severity=${recommendationReady.severityLabel} " +
-                        "area=${recommendationReady.affectedAreaPct} mode=${recommendationReady.inferenceMode}"
-                )
-            } catch (e: ScanAnotherLeafException) {
-                validationErrorTitle = "Scan another leaf"
-                validationError = e.message ?: "Please scan another tomato leaf in bright, even light."
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                Log.e("TomatoInsight", "Validation timed out", e)
-                validationError =
-                    "Request timed out. The website server may be waking up. Open ${ValidationRetrofitClient.BASE_URL}health in a browser, then try again."
-            } catch (e: HttpException) {
-                Log.e("TomatoInsight", "HTTP error ${e.code()}", e)
-                val body = e.response()?.errorBody()?.string()
-                validationError = buildString {
-                    append("HTTP ${e.code()}")
-                    if (!body.isNullOrBlank()) append("\n$body")
-                    append("\n\nServer: ${ValidationRetrofitClient.BASE_URL}")
-                    append("\nTip: The first request after a pause can take a minute while Render wakes up.")
-                }
-            } catch (e: Exception) {
-                Log.e("TomatoInsight", "Validation failed", e)
-                validationError = if (!context.hasValidatedInternet()) {
-                    e.message ?: "On-phone leaf check failed."
-                } else {
-                    buildString {
-                        append(e.message ?: "Could not reach validation server.")
-                        append("\n\nServer: ${ValidationRetrofitClient.BASE_URL}")
-                        append("\nTip: Open ${ValidationRetrofitClient.BASE_URL}health in the phone browser. The first request can take a minute while Render wakes up.")
-                    }
-                }
-            } finally {
-                isValidating = false
+    suspend fun validateTomatoLeaf(bitmap: Bitmap, validatingDraft: TileScanDraft?) {
+        isValidating = true
+        scanStage = "Checking tomato leaf…"
+        validationResult = null
+        validationError = null
+        validationErrorTitle = "Connection Error"
+        showIntervention = false
+        awaitingRecommendation = false
+        showOfflineRecommendationAlert = false
+        try {
+            val scored = ImageUploadHelper.validateTomatoLeaf(context, bitmap) { stage ->
+                withContext(Dispatchers.Main) { scanStage = stage }
             }
+            // OpenCV severity needs the website. Offline scans keep that field blank.
+            val withSeverity = if (scored.confirmsTomatoLeaf() &&
+                scored.hasDiseaseResult && context.hasValidatedInternet()) {
+                scanStage = "Measuring symptom severity…"
+                withContext(Dispatchers.IO) {
+                    val bytes = ByteArrayOutputStream().use { stream ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, stream)
+                        stream.toByteArray()
+                    }
+                    WebsiteScanClient.withSegmentationSeverity(bytes, scored)
+                }
+            } else if (scored.confirmsTomatoLeaf() && scored.hasDiseaseResult) {
+                scored.copy(
+                    severityLabel = null,
+                    affectedAreaPct = null,
+                    severityAssessable = null,
+                    severityReason = AWAITING_OPENCV_SEVERITY,
+                    aiRecommendations = null,
+                    aiRecommendationError = null,
+                    recommendationSource = null,
+                    groqModel = null
+                )
+            } else {
+                scored
+            }
+            val recommendationReady = withSeverity.ensureGuidesForAllDetections()
+            if (draft !== validatingDraft) return
+            validatingDraft?.result = recommendationReady
+            validationResult = recommendationReady
+            hasPendingSave = recommendationReady.confirmsTomatoLeaf() && recommendationReady.hasDiseaseResult
+            showNotTomatoAlert = !recommendationReady.isError && !recommendationReady.confirmsTomatoLeaf()
+            Log.d(
+                "TomatoInsight",
+                "Validation result=${recommendationReady.result}, class=${recommendationReady.detectedClass}, " +
+                    "disease=${recommendationReady.topDisease} severity=${recommendationReady.severityLabel} " +
+                    "area=${recommendationReady.affectedAreaPct} mode=${recommendationReady.inferenceMode}"
+            )
+        } catch (e: ScanAnotherLeafException) {
+            validationErrorTitle = "Scan another leaf"
+            validationError = e.message ?: "Please scan another tomato leaf in bright, even light."
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            Log.e("TomatoInsight", "Validation timed out", e)
+            validationError =
+                "Request timed out. The website server may be waking up. Open ${ValidationRetrofitClient.BASE_URL}health in a browser, then try again."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: HttpException) {
+            Log.e("TomatoInsight", "HTTP error ${e.code()}", e)
+            val body = e.response()?.errorBody()?.string()
+            validationError = buildString {
+                append("HTTP ${e.code()}")
+                if (!body.isNullOrBlank()) append("\n$body")
+                append("\n\nServer: ${ValidationRetrofitClient.BASE_URL}")
+                append("\nTip: The first request after a pause can take a minute while Render wakes up.")
+            }
+        } catch (e: Exception) {
+            Log.e("TomatoInsight", "Validation failed", e)
+            validationError = if (!context.hasValidatedInternet()) {
+                e.message ?: "On-phone leaf check failed."
+            } else {
+                buildString {
+                    append(e.message ?: "Could not reach validation server.")
+                    append("\n\nServer: ${ValidationRetrofitClient.BASE_URL}")
+                    append("\nTip: Open ${ValidationRetrofitClient.BASE_URL}health in the phone browser. The first request can take a minute while Render wakes up.")
+                }
+            }
+        } finally {
+            isValidating = false
+        }
+    }
+
+    LaunchedEffect(tileNumber, capturedImage) {
+        val image = capturedImage ?: return@LaunchedEffect
+        if (draft?.result == null && !isSavedScan && (draft != null || tileNumber == null)) {
+            validateTomatoLeaf(image, draft)
         }
     }
 
     fun processImage(bitmap: Bitmap) {
+        draft = tileNumber?.let { TileScanDraft(bitmap, plantNameInput) }
+        onDraftChanged(draft)
         capturedImage = bitmap
         validationResult = null
         validationError = null
@@ -231,7 +270,6 @@ fun PlantInfoScreen(
         awaitingRecommendation = false
         showOfflineRecommendationAlert = false
         recommendationPendingSave = false
-        validateTomatoLeaf(bitmap)
     }
 
     fun loadCareRecommendation(bitmap: Bitmap) {
@@ -253,6 +291,7 @@ fun PlantInfoScreen(
                         ImageUploadHelper.validateTomatoLeaf(context, bitmap)
                     }
                 }
+                draft?.result = merged
                 validationResult = merged
                 recommendationPendingSave = isSavedScan &&
                     !hasPendingSave &&
@@ -289,6 +328,7 @@ fun PlantInfoScreen(
                 }
                 WebsiteScanClient.withSegmentationSeverity(bytes, current)
             }.ensureGuidesForAllDetections()
+            draft?.result = merged
             validationResult = merged
             if (isSavedScan && !hasPendingSave) {
                 recommendationPendingSave = merged.hasAiRecommendations
@@ -532,7 +572,10 @@ fun PlantInfoScreen(
                     }
                     BasicTextField(
                         value = plantNameInput,
-                        onValueChange = { plantNameInput = it },
+                        onValueChange = {
+                            plantNameInput = it
+                            draft?.name = it
+                        },
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(start = 12.dp, top = 12.dp, end = 12.dp)
@@ -721,8 +764,8 @@ fun PlantInfoScreen(
                                             isLoadingRecommendation -> "Preparing care plan..."
                                             showsRescanGuidance && carePlanOpen -> "Hide rescan guidance"
                                             showsRescanGuidance -> "View rescan guidance"
-                                            carePlanOpen -> "Hide care plan"
-                                            else -> "View care plan"
+                                            carePlanOpen -> "Hide Intervention"
+                                            else -> "View Intervention"
                                         },
                                         fontWeight = FontWeight.Medium,
                                         fontSize = 15.sp,
@@ -787,6 +830,8 @@ fun PlantInfoScreen(
                                         }
                                         isSavingInfo = false
                                         if (!recommendationOnly && outcome is ScanSaveOutcome.Saved) {
+                                            onDraftChanged(null)
+                                            draft = null
                                             isSavedScan = true
                                             hasPendingSave = false
                                             recommendationPendingSave = false

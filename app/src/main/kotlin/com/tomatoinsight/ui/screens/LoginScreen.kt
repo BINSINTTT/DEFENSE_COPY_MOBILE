@@ -1,5 +1,6 @@
 package com.tomatoinsight.ui.screens
 
+import com.tomatoinsight.R
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -59,6 +60,7 @@ fun LoginScreen(
     }
 
     AuthScreenScaffold(
+        logoRes = R.drawable.auth_logo,
         headerMessage = "Log in to stay on top of your farm scans and plant health."
     ) {
         AuthTitleBlock(

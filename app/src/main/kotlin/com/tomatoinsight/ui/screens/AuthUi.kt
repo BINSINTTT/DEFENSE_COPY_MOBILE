@@ -29,6 +29,12 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -38,6 +44,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tomatoinsight.data.nameSuffixChoices
 import com.tomatoinsight.R
 import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoPrimary
@@ -111,6 +122,7 @@ fun persistRememberedAccount(context: Context, remember: Boolean, email: String,
 @Composable
 fun AuthScreenScaffold(
     headerMessage: String,
+    @androidx.annotation.DrawableRes logoRes: Int = R.drawable.tomatoinsight_logo,
     scrollContent: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -138,7 +150,7 @@ fun AuthScreenScaffold(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Image(
-                    painter = painterResource(R.drawable.login_logo),
+                    painter = painterResource(logoRes),
                     contentDescription = "TomatoInsight logo",
                     modifier = Modifier.size(88.dp),
                     contentScale = ContentScale.Fit
@@ -296,6 +308,41 @@ fun AuthTextField(
                     tint = AuthMuted,
                     modifier = Modifier.size(20.dp)
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun NameSuffixField(value: String, onChange: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = value.ifBlank { "None" },
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text("Suffix (optional)") },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = Color.Black,
+                unfocusedTextColor = Color.Black,
+                focusedLabelColor = Color.Black,
+                unfocusedLabelColor = Color.Black
+            ),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(Color.White)
+        ) {
+            nameSuffixChoices.forEach { suffix ->
+                DropdownMenuItem(text = { Text(suffix.ifBlank { "None" }, color = Color.Black) }, onClick = {
+                    onChange(suffix)
+                    expanded = false
+                })
             }
         }
     }

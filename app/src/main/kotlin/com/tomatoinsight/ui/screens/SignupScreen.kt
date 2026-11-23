@@ -1,5 +1,6 @@
 package com.tomatoinsight.ui.screens
 
+import com.tomatoinsight.R
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.tomatoinsight.data.FarmAccountIsolation
+import com.tomatoinsight.data.ProfileNameParts
 import com.tomatoinsight.data.FarmerProfile
 import com.tomatoinsight.data.FirestoreFarmRepository
 import com.tomatoinsight.data.PendingSignup
@@ -40,6 +42,7 @@ fun SignupScreen(
     val scope = rememberCoroutineScope()
     var firstName by remember { mutableStateOf("") }
     var middleName by remember { mutableStateOf("") }
+    var nameSuffix by remember { mutableStateOf("") }
     var lastName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -53,6 +56,7 @@ fun SignupScreen(
     val auth = remember { FirebaseAuth.getInstance() }
 
     AuthScreenScaffold(
+        logoRes = R.drawable.auth_logo,
         headerMessage = "Create your account and simplify your farm monitoring.",
         scrollContent = true
     ) {
@@ -72,7 +76,7 @@ fun SignupScreen(
         AuthPersonField(
             value = firstName,
             onValueChange = {
-                firstName = it
+                firstName = it.filterNot(Char::isDigit)
                 if (error != null) error = null
             },
             placeholder = "First name"
@@ -81,22 +85,24 @@ fun SignupScreen(
         AuthPersonField(
             value = middleName,
             onValueChange = {
-                middleName = it
+                middleName = it.filterNot(Char::isDigit).take(1)
                 if (error != null) error = null
             },
-            placeholder = "Middle name (optional)"
+            placeholder = "M.I. (optional)"
         )
         Spacer(modifier = Modifier.height(12.dp))
         AuthPersonField(
             value = lastName,
             onValueChange = {
-                lastName = it
+                lastName = it.filterNot(Char::isDigit)
                 if (error != null) error = null
             },
             placeholder = "Last name"
         )
         Spacer(modifier = Modifier.height(12.dp))
 
+        NameSuffixField(nameSuffix) { nameSuffix = it }
+        Spacer(modifier = Modifier.height(12.dp))
         AuthEmailField(value = email, onValueChange = {
             email = it
             if (error != null) error = null
@@ -144,6 +150,8 @@ fun SignupScreen(
                 when {
                     firstName.isBlank() -> error = "Please enter your first name"
                     lastName.isBlank() -> error = "Please enter your last name"
+                    listOf(firstName, middleName, lastName).any { value -> value.any(Char::isDigit) } ->
+                        error = "Names cannot contain numbers"
                     else -> {
                         val emailError = emailValidationError(email)
                         if (emailError != null) {
@@ -170,6 +178,7 @@ fun SignupScreen(
                                 status = PendingSignup.STATUS_CREATING,
                                 firstName = firstName.trim(),
                                 middleName = middleName.trim(),
+                                nameSuffix = nameSuffix,
                                 lastName = lastName.trim()
                             )
                         )
@@ -180,9 +189,7 @@ fun SignupScreen(
                                     auth.createUserWithEmailAndPassword(trimmedEmail, password).await()
                                 val user = credential.user
                                 val uid = user?.uid.orEmpty()
-                                val fullName = listOf(firstName, middleName, lastName)
-                                    .filter { it.isNotBlank() }
-                                    .joinToString(" ")
+                                val fullName = ProfileNameParts(firstName, middleName.uppercase(), lastName, nameSuffix).displayName
 
                                 if (user != null && fullName.isNotBlank()) {
                                     val profileUpdates = UserProfileChangeRequest.Builder()
@@ -207,6 +214,7 @@ fun SignupScreen(
                                                 middleInitial = middleName.trim()
                                                     .uppercase()
                                                     .take(1),
+                                                nameSuffix = nameSuffix,
                                                 lastName = lastName.trim(),
                                                 email = trimmedEmail
                                             ),
@@ -226,6 +234,7 @@ fun SignupScreen(
                                         status = PendingSignup.STATUS_AWAITING_VERIFICATION,
                                         firstName = firstName.trim(),
                                         middleName = middleName.trim(),
+                                        nameSuffix = nameSuffix,
                                         lastName = lastName.trim()
                                     )
                                 )
@@ -245,6 +254,7 @@ fun SignupScreen(
                                             status = PendingSignup.STATUS_AWAITING_VERIFICATION,
                                             firstName = firstName.trim(),
                                             middleName = middleName.trim(),
+                                            nameSuffix = nameSuffix,
                                             lastName = lastName.trim()
                                         )
                                     )

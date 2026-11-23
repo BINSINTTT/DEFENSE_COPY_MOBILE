@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -198,6 +200,7 @@ fun DashboardScreen(
     columns: Int,
     farmerName: String = "",
     farmName: String = "",
+    draftTiles: Set<Int> = emptySet(),
     plantNames: Map<Int, String> = emptyMap(),
     selectedFarmWeek: Int = 0,
     scanCalendar: ScanCalendar = ScanCalendar(),
@@ -224,6 +227,9 @@ fun DashboardScreen(
 ) {
     val auth = FirebaseAuth.getInstance()
     val user = auth.currentUser
+    val gridViewport = key(user?.uid, rows, columns) {
+        rememberSaveable(saver = FarmGridViewport.Saver) { FarmGridViewport() }
+    }
     val userName = farmerName.ifBlank {
         user?.displayName?.ifBlank { null }
             ?: user?.email?.substringBefore("@")?.replaceFirstChar { it.uppercase() }
@@ -535,6 +541,8 @@ fun DashboardScreen(
                 ) {
                     if (hasFarmLayout) {
                         FarmGridView(
+                            viewport = gridViewport,
+                            draftTiles = draftTiles,
                             rows = rows,
                             columns = columns,
                             selectedTile = selectedTile,
@@ -722,6 +730,7 @@ private fun FarmTile(
     isSelected: Boolean,
     result: TileScanResult?,
     plantName: String = "",
+    hasDraft: Boolean,
     tileSize: Dp,
     notificationCount: Int = 0,
     onNotify: () -> Unit = {},
@@ -774,7 +783,7 @@ private fun FarmTile(
                     modifier = Modifier.size(emojiSize)
                 )
                 Text(
-                    text = plantName.ifBlank { if (hasResult) "#$tileNumber" else "$tileNumber" },
+                    text = if (hasDraft) "Draft · $tileNumber" else plantName.ifBlank { if (hasResult) "#$tileNumber" else "$tileNumber" },
                     fontSize = (if (hasResult) 11.sp else 12.sp) * contentScale,
                     fontWeight = FontWeight.Bold,
                     color = labelColor,
@@ -830,12 +839,26 @@ private fun FarmTile(
     }
 }
 
+private class FarmGridViewport(zoom: Float = 1f, pan: Offset = Offset.Zero) {
+    var scale by mutableFloatStateOf(zoom)
+    var offset by mutableStateOf(pan)
+
+    companion object {
+        val Saver = listSaver<FarmGridViewport, Float>(
+            save = { listOf(it.scale, it.offset.x, it.offset.y) },
+            restore = { FarmGridViewport(it[0], Offset(it[1], it[2])) }
+        )
+    }
+}
+
 @Composable
-fun FarmGridView(
+private fun FarmGridView(
+    viewport: FarmGridViewport,
     rows: Int,
     columns: Int,
     selectedTile: Int?,
     tileScanHistory: TileScanHistory,
+    draftTiles: Set<Int> = emptySet(),
     plantNames: Map<Int, String> = emptyMap(),
     scanCalendar: ScanCalendar = ScanCalendar(),
     onTileSelected: (Int) -> Unit,
@@ -854,8 +877,6 @@ fun FarmGridView(
             .coerceAtLeast(1.dp)
         val maxZoom = (96.dp / fitTile).coerceIn(2.5f, 6f)
 
-        var scale by remember(rows, columns) { mutableFloatStateOf(1f) }
-        var offset by remember(rows, columns) { mutableStateOf(Offset.Zero) }
         var containerWidth by remember { mutableFloatStateOf(0f) }
         var containerHeight by remember { mutableFloatStateOf(0f) }
         var contentWidth by remember { mutableFloatStateOf(0f) }
@@ -871,14 +892,21 @@ fun FarmGridView(
         }
 
         fun applyTransform(zoomChange: Float, previousFocal: Offset, focal: Offset) {
-            val oldScale = scale
+            val oldScale = viewport.scale
             if (oldScale <= 0f) return
             val newScale = (oldScale * zoomChange).coerceIn(1f, maxZoom)
             val viewCenter = Offset(containerWidth / 2f, containerHeight / 2f)
             val ratio = newScale / oldScale
-            val next = focal - viewCenter - (previousFocal - viewCenter - offset) * ratio
-            scale = newScale
-            offset = if (newScale <= 1.001f) Offset.Zero else clampOffset(next, newScale)
+            val next = focal - viewCenter - (previousFocal - viewCenter - viewport.offset) * ratio
+            viewport.scale = newScale
+            viewport.offset = if (newScale <= 1.001f) Offset.Zero else clampOffset(next, newScale)
+        }
+
+        LaunchedEffect(viewport, maxZoom, containerWidth, containerHeight, contentWidth, contentHeight) {
+            if (minOf(containerWidth, containerHeight, contentWidth, contentHeight) > 0f) {
+                viewport.scale = viewport.scale.coerceIn(1f, maxZoom)
+                viewport.offset = clampOffset(viewport.offset, viewport.scale)
+            }
         }
 
         Box(
@@ -888,7 +916,7 @@ fun FarmGridView(
                 containerWidth = size.width.toFloat()
                 containerHeight = size.height.toFloat()
             }
-            .pointerInput(rows, columns, maxZoom) {
+            .pointerInput(viewport, maxZoom) {
                 val touchSlop = viewConfiguration.touchSlop
                 awaitEachGesture {
                     var transforming = false
@@ -920,7 +948,7 @@ fun FarmGridView(
                                 previousFocal = previousCentroid,
                                 focal = centroid
                             )
-                        } else if (pastSlop && scale > 1.02f) {
+                        } else if (pastSlop && viewport.scale > 1.02f) {
                             val change = pressed[0]
                             transforming = true
                             change.consume()
@@ -930,7 +958,7 @@ fun FarmGridView(
                             accumulated += change.position - change.previousPosition
                             if (
                                 accumulated.getDistance() > touchSlop &&
-                                scale > 1.02f
+                                viewport.scale > 1.02f
                             ) {
                                 pastSlop = true
                                 transforming = true
@@ -950,10 +978,10 @@ fun FarmGridView(
                     contentHeight = size.height.toFloat()
                 }
                 .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                    translationX = offset.x
-                    translationY = offset.y
+                    scaleX = viewport.scale
+                    scaleY = viewport.scale
+                    translationX = viewport.offset.x
+                    translationY = viewport.offset.y
                 },
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -970,6 +998,7 @@ fun FarmGridView(
                                 isSelected = selectedTile == tileNumber,
                                 result = tileScanHistory.latestFor(tileNumber),
                                 plantName = plantNames[tileNumber].orEmpty(),
+                                hasDraft = tileNumber in draftTiles,
                                 tileSize = fitTile,
                                 notificationCount = tileNotificationMessages(
                                     tileNumber,
@@ -1076,7 +1105,7 @@ fun TileNotificationDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Image(
-                    painter = painterResource(R.drawable.login_logo),
+                    painter = painterResource(R.drawable.tomatoinsight_logo),
                     contentDescription = "TomatoInsight logo",
                     modifier = Modifier.size(92.dp),
                     contentScale = ContentScale.Fit

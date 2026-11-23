@@ -154,6 +154,9 @@ fun ProfileScreen(
             }
         )
     }
+    var nameSuffix by remember(farmerProfile.nameSuffix, authNameParts.nameSuffix) {
+        mutableStateOf(farmerProfile.nameSuffix ?: authNameParts.nameSuffix)
+    }
     var lastName by remember {
         mutableStateOf(farmerProfile.lastName.ifBlank { authNameParts.lastName })
     }
@@ -228,7 +231,7 @@ fun ProfileScreen(
         }
     }
 
-    val displayName = listOf(firstName, middleInitial, lastName)
+    val displayName = listOf(firstName, middleInitial, lastName, nameSuffix)
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .joinToString(" ")
@@ -254,7 +257,7 @@ fun ProfileScreen(
         bottomBar = {
             CustomBottomBar(
                 selectedTab = "profile",
-                cameraEnabled = true,
+                cameraEnabled = false,
                 onHomeClick = onNavigateToHome,
                 onMonitoringClick = onNavigateToMonitoring,
                 onCameraClick = onCameraClick,
@@ -628,6 +631,12 @@ fun ProfileScreen(
                     formSuccess = null
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+                NameSuffixField(nameSuffix) {
+                    nameSuffix = it
+                    formError = null
+                    formSuccess = null
+                }
+                Spacer(modifier = Modifier.height(8.dp))
                 ProfileField("Farm name", farmName, "e.g. Green Valley Tomatoes") {
                     farmName = it
                     formError = null
@@ -637,6 +646,7 @@ fun ProfileScreen(
                 ProfileDetailRow("First name", firstName)
                 ProfileDetailRow("Last name", lastName)
                 ProfileDetailRow("Middle initial", middleInitial)
+                ProfileDetailRow("Suffix", nameSuffix.ifBlank { "None" })
                 ProfileDetailRow("Farm name", farmName)
             }
 
@@ -648,6 +658,7 @@ fun ProfileScreen(
             Button(
                 onClick = {
                     val next = FarmerProfile(
+                        nameSuffix = nameSuffix,
                         firstName = firstName.trim(),
                         middleInitial = middleInitial.trim().uppercase().take(1),
                         lastName = lastName.trim(),

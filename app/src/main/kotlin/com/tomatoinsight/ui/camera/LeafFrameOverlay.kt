@@ -22,7 +22,8 @@ import com.tomatoinsight.ui.theme.TomatoGreen
 @Composable
 fun LeafFrameOverlay(
     modifier: Modifier = Modifier,
-    instruction: String = "Place one tomato leaf inside the oval"
+    instruction: String = "Frame one tomato leaf inside the square",
+    showLightingHint: Boolean = true
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
@@ -33,24 +34,24 @@ fun LeafFrameOverlay(
             val bounds = TomatoLeafShape.guideBounds(size.width, size.height)
 
             drawRect(color = Color.Black.copy(alpha = 0.52f))
-            drawOval(
+            drawRect(
                 color = Color.Transparent,
                 topLeft = bounds.topLeft,
                 size = bounds.size,
                 blendMode = BlendMode.Clear
             )
 
-            drawOval(
-                color = Color.White.copy(alpha = 0.95f),
-                topLeft = bounds.topLeft,
-                size = bounds.size,
-                style = Stroke(width = LeafCameraGuide.STROKE_WIDTH_DP * density)
-            )
-            drawOval(
-                color = TomatoGreen,
+            drawRect(
+                color = Color.Black.copy(alpha = 0.75f),
                 topLeft = bounds.topLeft,
                 size = bounds.size,
                 style = Stroke(width = LeafCameraGuide.OUTER_STROKE_WIDTH_DP * density)
+            )
+            drawRect(
+                color = TomatoGreen,
+                topLeft = bounds.topLeft,
+                size = bounds.size,
+                style = Stroke(width = LeafCameraGuide.STROKE_WIDTH_DP * density)
             )
         }
 
@@ -65,8 +66,8 @@ fun LeafFrameOverlay(
             textAlign = TextAlign.Center
         )
 
-        Text(
-            text = "Fill the oval · Good lighting · One leaf only",
+        if (showLightingHint) Text(
+            text = "Keep the whole leaf in view and use even light",
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 120.dp, start = 24.dp, end = 24.dp),

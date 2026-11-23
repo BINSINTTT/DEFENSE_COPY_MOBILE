@@ -10,7 +10,8 @@ data class PendingSignup(
     val middleName: String = "",
     val lastName: String = "",
     val startedAt: Long = System.currentTimeMillis(),
-    val resendUntilMs: Long = 0L
+    val resendUntilMs: Long = 0L,
+    val nameSuffix: String = ""
 ) {
     val isCreating: Boolean get() = status == STATUS_CREATING
     val isAwaitingVerification: Boolean get() = status == STATUS_AWAITING_VERIFICATION
@@ -32,6 +33,7 @@ object PendingSignupStore {
     private const val KEY_STATUS = "status"
     private const val KEY_FIRST = "first_name"
     private const val KEY_MIDDLE = "middle_name"
+    private const val KEY_SUFFIX = "name_suffix"
     private const val KEY_LAST = "last_name"
     private const val KEY_STARTED = "started_at"
     private const val KEY_RESEND_UNTIL = "resend_until"
@@ -59,6 +61,7 @@ object PendingSignupStore {
             status = status,
             firstName = prefs.getString(KEY_FIRST, "").orEmpty(),
             middleName = prefs.getString(KEY_MIDDLE, "").orEmpty(),
+            nameSuffix = normalizeNameSuffix(prefs.getString(KEY_SUFFIX, "")),
             lastName = prefs.getString(KEY_LAST, "").orEmpty(),
             startedAt = startedAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
             resendUntilMs = prefs.getLong(KEY_RESEND_UNTIL, 0L)
@@ -75,6 +78,7 @@ object PendingSignupStore {
             .putString(KEY_STATUS, pending.status)
             .putString(KEY_FIRST, pending.firstName)
             .putString(KEY_MIDDLE, pending.middleName)
+            .putString(KEY_SUFFIX, pending.nameSuffix)
             .putString(KEY_LAST, pending.lastName)
             .putLong(KEY_STARTED, pending.startedAt)
             .putLong(KEY_RESEND_UNTIL, pending.resendUntilMs)
