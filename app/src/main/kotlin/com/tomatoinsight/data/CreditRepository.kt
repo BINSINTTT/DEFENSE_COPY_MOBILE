@@ -26,6 +26,7 @@ data class AccountCredits(
     val balance: Int = 0,
     val signupGranted: Boolean = false,
     val profileBonusGranted: Boolean = false,
+    val currentPackId: String? = null,
     val updatedAt: String? = null
 )
 
@@ -58,20 +59,21 @@ data class CreditPack(
     val featured: Boolean = false
 )
 
-/** Affordable PHP packs for local farmers (demo checkout still charges ₱0). */
+/** Demo packs grant credits immediately; every pack includes the same tools. */
 val CREDIT_PACKS = listOf(
     CreditPack(
         id = "starter",
         name = "Starter",
         credits = 10,
         listPricePhp = 49.0,
-        audience = "Small farms getting started",
+        audience = "The same tools, with 10 scan credits",
         features = listOf(
             "10 scan credits",
             "Leaf disease classification",
             "Farm blueprint tiles",
             "Care recommendations",
-            "Home dashboard access"
+            "Scan history & monitoring",
+            "Week reminders"
         ),
         ctaLabel = "Choose Plan"
     ),
@@ -80,15 +82,14 @@ val CREDIT_PACKS = listOf(
         name = "Grower",
         credits = 25,
         listPricePhp = 99.0,
-        audience = "Busy farms with regular scans",
+        audience = "The same tools, with 25 scan credits",
         features = listOf(
             "25 scan credits",
             "Leaf disease classification",
             "Farm blueprint tiles",
             "Care recommendations",
             "Scan history & monitoring",
-            "Week reminders",
-            "~₱4.00 per scan"
+            "Week reminders"
         ),
         ctaLabel = "Get started",
         featured = true
@@ -98,13 +99,14 @@ val CREDIT_PACKS = listOf(
         name = "Season",
         credits = 50,
         listPricePhp = 149.0,
-        audience = "Full-season coverage for larger plots",
+        audience = "The same tools, with 50 scan credits",
         features = listOf(
             "50 scan credits",
-            "Best value per scan (~₱3)",
-            "All Grower features",
-            "Season-long tracking",
-            "Priority pack size"
+            "Leaf disease classification",
+            "Farm blueprint tiles",
+            "Care recommendations",
+            "Scan history & monitoring",
+            "Week reminders"
         ),
         ctaLabel = "Choose Plan"
     )
@@ -172,6 +174,7 @@ class CreditRepository(context: Context) {
             balance = prefs.getInt(balanceKey(uid), 0).coerceAtLeast(0),
             signupGranted = prefs.getBoolean(signupKey(uid), false),
             profileBonusGranted = prefs.getBoolean(bonusKey(uid), false),
+            currentPackId = prefs.getString(packKey(uid), null),
             updatedAt = prefs.getString(updatedKey(uid), null)
         )
     }
@@ -382,7 +385,11 @@ class CreditRepository(context: Context) {
                 val snap = transaction.get(userRef)
                 val node = snap.get("credits").asStringMap().toAccountCredits()
                 if (!node.signupGranted) throw IllegalStateException("credits-missing")
-                val next = node.copy(balance = node.balance + pack.credits, updatedAt = isoTimestamp(now.time))
+                val next = node.copy(
+                    balance = node.balance + pack.credits,
+                    currentPackId = pack.id,
+                    updatedAt = isoTimestamp(now.time)
+                )
                 transaction.set(userRef, mapOf("credits" to next.toMap()), SetOptions.merge())
                 node.balance to next
             })
@@ -390,7 +397,7 @@ class CreditRepository(context: Context) {
             return@withContext CreditAction(
                 ok = false,
                 code = "credits-unavailable",
-                message = demoCheckoutErrorMessage(error)
+                message = planSelectionErrorMessage(error)
             )
         }
 
@@ -405,8 +412,8 @@ class CreditRepository(context: Context) {
             "listPricePhp" to pack.listPricePhp,
             "amountChargedPhp" to 0,
             "currency" to "PHP",
-            "status" to "paid",
-            "method" to "demo",
+            "status" to "selected",
+            "method" to "plan_selection",
             "isDemo" to true,
             "createdAt" to isoTimestamp(now.time),
             "createdAtMs" to now.time,
@@ -452,7 +459,7 @@ class CreditRepository(context: Context) {
             PaymentListResult(rows = rows)
         } catch (_: Exception) {
             PaymentListResult(
-                error = "Could not load purchases. Check Firestore rules for the payments collection."
+                error = "Could not load plan history. Check Firestore rules for the payments collection."
             )
         }
     }
@@ -500,6 +507,7 @@ class CreditRepository(context: Context) {
             .putInt(balanceKey(uid), account.balance)
             .putBoolean(signupKey(uid), account.signupGranted)
             .putBoolean(bonusKey(uid), account.profileBonusGranted)
+            .putString(packKey(uid), account.currentPackId)
             .putString(updatedKey(uid), account.updatedAt)
             .apply()
     }
@@ -546,11 +554,11 @@ class CreditRepository(context: Context) {
             left.profileBonusGranted == right.profileBonusGranted
     }
 
-    private fun demoCheckoutErrorMessage(error: Exception): String {
+    private fun planSelectionErrorMessage(error: Exception): String {
         if (error.isPermissionDenied()) {
-            return "Firestore blocked this update. Publish the credit and payments rules, then try again."
+            return "Firestore blocked this update. Check the credit rules, then try again."
         }
-        return "Could not complete the demo payment. Try again."
+        return "Could not add this plan's credits. Try again."
     }
 
     private data class GrantResult(
@@ -564,6 +572,7 @@ class CreditRepository(context: Context) {
         private fun balanceKey(uid: String) = "bal_$uid"
         private fun signupKey(uid: String) = "signup_$uid"
         private fun bonusKey(uid: String) = "bonus_$uid"
+        private fun packKey(uid: String) = "pack_$uid"
         private fun updatedKey(uid: String) = "at_$uid"
         private fun pendingKey(uid: String) = "pending_$uid"
     }
@@ -574,6 +583,7 @@ private fun AccountCredits.toMap(): Map<String, Any> {
         "balance" to balance,
         "signupGranted" to signupGranted,
         "profileBonusGranted" to profileBonusGranted,
+        "currentPackId" to (currentPackId ?: ""),
         "updatedAt" to (updatedAt ?: isoNow())
     )
     return fields
@@ -585,6 +595,7 @@ private fun Map<String, Any?>?.toAccountCredits(): AccountCredits {
         balance = if (balance > 0) balance else 0,
         signupGranted = this?.get("signupGranted") == true,
         profileBonusGranted = this?.get("profileBonusGranted") == true,
+        currentPackId = this?.get("currentPackId").asText().ifBlank { null },
         updatedAt = this?.get("updatedAt").asText().ifBlank { null }
     )
 }

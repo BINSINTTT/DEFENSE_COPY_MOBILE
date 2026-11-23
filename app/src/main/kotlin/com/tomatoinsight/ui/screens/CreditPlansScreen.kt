@@ -52,6 +52,7 @@ private val Line = Color(0x1A243046)
 @Composable
 fun CreditPlansScreen(
     balance: Int?,
+    currentPackId: String?,
     payments: List<PaymentRecord>,
     paymentsNote: String?,
     onBack: () -> Unit,
@@ -100,6 +101,14 @@ fun CreditPlansScreen(
                 )
             }
 
+            val currentPack = CREDIT_PACKS.firstOrNull { it.id == currentPackId }
+            Text(
+                text = "Current plan: ${currentPack?.name ?: "Free"} Plan",
+                color = Muted,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(start = 48.dp, top = 2.dp, bottom = 8.dp)
+            )
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -137,7 +146,7 @@ fun CreditPlansScreen(
                     .padding(16.dp)
             ) {
                 Text(
-                    text = "TOP UP",
+                    text = "DEMO PLANS · NO PAYMENT REQUIRED",
                     color = Accent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -178,14 +187,14 @@ fun CreditPlansScreen(
                     .padding(16.dp)
             ) {
                 Text(
-                    text = "PURCHASES",
+                    text = "ACTIVITY",
                     color = Accent,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp
                 )
                 Text(
-                    text = "Demo payment history",
+                    text = "Plan history",
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     color = Ink,
@@ -194,7 +203,7 @@ fun CreditPlansScreen(
                 if (payments.isEmpty()) {
                     Text(
                         text = paymentsNote
-                            ?: "No demo payments yet. Complete checkout above to create one.",
+                            ?: "No plan selected yet. Choose a pack above to add credits instantly.",
                         color = Muted,
                         fontSize = 14.sp,
                         lineHeight = 20.sp
@@ -216,7 +225,11 @@ fun CreditPlansScreen(
                                     color = Ink
                                 )
                                 Text(
-                                    text = "${formatPhp(row.amountChargedPhp)} demo · ${formatPaymentWhen(row.createdAt)}",
+                                    text = if (row.amountChargedPhp <= 0) {
+                                        "No charge · ${formatPaymentWhen(row.createdAt)}"
+                                    } else {
+                                        "${formatPhp(row.amountChargedPhp)} · ${formatPaymentWhen(row.createdAt)}"
+                                    },
                                     color = Muted,
                                     fontSize = 13.sp,
                                     modifier = Modifier.padding(top = 2.dp)

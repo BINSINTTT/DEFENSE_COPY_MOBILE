@@ -1,5 +1,6 @@
 package com.tomatoinsight.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,8 @@ import androidx.compose.ui.unit.sp
 import com.tomatoinsight.api.AiRecommendationSection
 import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.isHealthyDisease
+import com.tomatoinsight.api.diseaseFullDisplayLabel
+import com.tomatoinsight.api.normalizeDiseaseKey
 import com.tomatoinsight.data.DiseaseTreatment
 import com.tomatoinsight.data.SavedRecommendation
 import com.tomatoinsight.data.asAiRecommendations
@@ -39,13 +42,24 @@ import com.tomatoinsight.data.treatmentsForDetectedScores
 import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoRed
 
+private fun isViralDisease(name: String): Boolean {
+    val key = normalizeDiseaseKey(name)
+    return key.contains("leafcurl") || key.contains("tlcv") ||
+        key.contains("spottedwilt") || key.contains("tswv")
+}
+
+private fun interventionTitle(name: String): String {
+    return diseaseFullDisplayLabel(name)
+}
+
 @Composable
 fun DiseaseTreatmentCard(
     result: ValidationResponse,
     savedRecommendation: SavedRecommendation? = null
 ) {
-    // One care section for the top diagnosis; measured severity selects the plan.
+    // Build every detected section; only the primary diagnosis uses measured severity.
     val withAllGuides = result.ensureGuidesForAllDetections()
+    if (result.stage == "offline" && !withAllGuides.hasAiRecommendations) return
     if (withAllGuides.hasAiRecommendations) {
         GroqTreatmentCard(withAllGuides)
         return
@@ -97,6 +111,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
         ) {
             TreatmentCardHeader(
                 isHealthy = isHealthy,
+                isViral = isViralDisease(guide.diseaseName),
                 accent = accent,
                 sourceLabel = null,
                 rescanRequired = rescanRequired
@@ -104,7 +119,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
             Spacer(modifier = Modifier.height(12.dp))
             if (guide.diseaseName.isNotBlank()) {
                 Text(
-                    text = guide.diseaseName,
+                    text = interventionTitle(guide.diseaseName),
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
                     color = Color(0xFF212121)
@@ -134,6 +149,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
                     text = when {
                         rescanRequired -> "How to retake the scan"
                         isHealthy -> "What to do"
+                        isViralDisease(guide.diseaseName) -> "Management actions"
                         else -> "Treatment steps"
                     },
                     fontWeight = FontWeight.Bold,
@@ -150,7 +166,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
             }
             if (guide.preventionTips.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(14.dp))
-                PreventionHeader()
+                PreventionHeader(isViralDisease(guide.diseaseName))
                 guide.preventionTips.forEach { tip ->
                     Text(
                         text = "• $tip",
@@ -162,7 +178,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
             }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Guidance only — verify on the plant before treating.",
+                text = "Guidance only — confirm the diagnosis before removing a plant or applying products.",
                 fontSize = 11.sp,
                 color = Color(0xFF9E9E9E)
             )
@@ -176,69 +192,40 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
     val sections = ai.sections.orEmpty()
     if (sections.isEmpty()) return
 
-    val primaryName = ai.primaryDisease ?: sections.first().disease.orEmpty()
-    val isHealthy = isHealthyDisease(primaryName) &&
-        sections.none { !isHealthyDisease(it.disease.orEmpty()) && (it.confidencePercent ?: 0) >= 10 }
-    val accent = if (isHealthy) TomatoGreen else TomatoRed
-    val rescanRequired = !isHealthy && result.severityAssessable == false
-
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isHealthy) Color(0xFFF1F8E9) else Color(0xFFFFF8E1)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAF7)),
+        border = BorderStroke(1.dp, Color(0xFFCEE3D0)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(14.dp)
         ) {
-            TreatmentCardHeader(
-                isHealthy = isHealthy,
-                accent = accent,
-                sourceLabel = when (result.recommendationSource) {
-                    "groq" -> "Powered by Groq"
-                    "rules" -> "Built-in care guide"
-                    else -> "Care recommendations"
-                },
-                rescanRequired = rescanRequired
-            )
-
-            if (!ai.combinedNote.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = ai.combinedNote,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF37474F),
-                    lineHeight = 18.sp
-                )
-            }
-
             sections.forEachIndexed { index, section ->
                 if (index > 0) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    HorizontalDivider(color = Color(0xFFE0E0E0))
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = Color(0xFFD6E5D7))
+                    Spacer(modifier = Modifier.height(14.dp))
                 }
                 AiRecommendationSectionBlock(
                     section = section,
-                    accent = accent,
-                    rescanRequired = rescanRequired
+                    isSecondary = index > 0,
+                    severityLabel = if (index == 0) result.severityLabel else null,
+                    rescanRequired = index == 0 &&
+                        !isHealthyDisease(section.disease.orEmpty()) &&
+                        result.severityAssessable == false
                 )
             }
-
-            result.aiDisclaimer?.takeIf { it.isNotBlank() }?.let { disclaimer ->
-                Spacer(modifier = Modifier.height(14.dp))
-                Text(
-                    text = disclaimer,
-                    fontSize = 11.sp,
-                    color = Color(0xFF757575),
-                    lineHeight = 15.sp
-                )
-            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Guidance only — confirm the diagnosis before removing a plant or applying products.",
+                fontSize = 11.sp,
+                color = Color(0xFF757575),
+                lineHeight = 15.sp
+            )
         }
     }
 }
@@ -246,30 +233,45 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
 @Composable
 private fun AiRecommendationSectionBlock(
     section: AiRecommendationSection,
-    accent: Color,
+    isSecondary: Boolean,
+    severityLabel: String?,
     rescanRequired: Boolean = false
 ) {
-    val disease = section.disease.orEmpty()
+    val disease = interventionTitle(section.disease.orEmpty())
     val percent = section.confidencePercent ?: 0
     val sectionHealthy = isHealthyDisease(disease)
-    val sectionAccent = if (sectionHealthy) TomatoGreen else accent
-
+    val eyebrow = when {
+        isSecondary -> "ADDITIONAL MODEL DETECTION · $percent% CONFIDENCE"
+        sectionHealthy -> "HEALTHY CARE PLAN"
+        severityLabel.equals("Severe", ignoreCase = true) -> "INTERVENTION"
+        severityLabel.isNullOrBlank() || severityLabel == "Unable to Assess" ->
+            "GENERAL CARE GUIDANCE · SEVERITY UNAVAILABLE"
+        else -> "${severityLabel.uppercase()} CARE PLAN"
+    }
     Text(
-        text = buildString {
-            append(disease.ifBlank { "Detected condition" })
-            append(" · $percent% diagnosis confidence")
-        },
+        text = eyebrow,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 10.sp,
+        color = Color(0xFF6F7770),
+        letterSpacing = 0.5.sp
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = disease.ifBlank { "Detected condition" },
         fontWeight = FontWeight.Bold,
         fontSize = 15.sp,
         color = Color(0xFF212121)
     )
-    section.urgency?.takeIf { it.isNotBlank() }?.let { urgency ->
-        Spacer(modifier = Modifier.height(4.dp))
+    if (isSecondary) {
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = urgency,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = sectionAccent
+            text = if (sectionHealthy)
+                "This healthy detection does not rule out the primary disease. Check visible symptoms before acting."
+            else
+                "This is another model detection, not a confirmed second diagnosis. Its severity was not assessed. Check this leaf and nearby plants before acting.",
+            fontSize = 12.sp,
+            color = Color(0xFF6F7770),
+            lineHeight = 17.sp
         )
     }
     section.summary?.takeIf { it.isNotBlank() }?.let { summary ->
@@ -289,30 +291,41 @@ private fun AiRecommendationSectionBlock(
             text = when {
                 rescanRequired -> "How to retake the scan"
                 sectionHealthy -> "What to do"
+                isViralDisease(disease) -> "Management actions"
                 else -> "Treatment steps"
-            },
+            }.uppercase(),
             fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = Color(0xFF2E7D32)
+            fontSize = 11.sp,
+            color = Color(0xFF303A31)
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        steps.forEachIndexed { stepIndex, step ->
-            TreatmentStepRow(index = stepIndex + 1, text = step)
-            if (stepIndex < steps.lastIndex) {
-                Spacer(modifier = Modifier.height(8.dp))
-            }
+        Spacer(modifier = Modifier.height(6.dp))
+        steps.forEach { step ->
+            Text(
+                text = "•  $step",
+                fontSize = 12.sp,
+                color = Color(0xFF303A31),
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
         }
     }
 
     val prevention = section.prevention.orEmpty().filter { it.isNotBlank() }
     if (prevention.isNotEmpty()) {
-        Spacer(modifier = Modifier.height(12.dp))
-        PreventionHeader()
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = if (isViralDisease(disease)) "PREVENT SPREAD TO OTHER PLANTS" else "PREVENTION",
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.sp,
+            color = Color(0xFF303A31)
+        )
+        Spacer(modifier = Modifier.height(6.dp))
         prevention.forEach { tip ->
             Text(
-                text = "• $tip",
-                fontSize = 13.sp,
-                color = Color(0xFF424242),
+                text = "•  $tip",
+                fontSize = 12.sp,
+                color = Color(0xFF303A31),
+                lineHeight = 18.sp,
                 modifier = Modifier.padding(bottom = 4.dp)
             )
         }
@@ -344,6 +357,7 @@ private fun OfflineTreatmentCard(
         ) {
             TreatmentCardHeader(
                 isHealthy = onlyHealthy,
+                isViral = isViralDisease(treatments.first().diseaseName),
                 accent = accent,
                 sourceLabel = "Built-in care guide",
                 rescanRequired = rescanRequired
@@ -410,6 +424,7 @@ private fun OfflineTreatmentCard(
                     text = when {
                         rescanRequired -> "How to retake the scan"
                         sectionHealthy -> "What to do"
+                        isViralDisease(treatment.diseaseName) -> "Management actions"
                         else -> "Treatment steps"
                     },
                     fontWeight = FontWeight.Bold,
@@ -427,7 +442,7 @@ private fun OfflineTreatmentCard(
 
                 if (treatment.preventionTips.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(14.dp))
-                    PreventionHeader()
+                    PreventionHeader(isViralDisease(treatment.diseaseName))
                     treatment.preventionTips.forEach { tip ->
                         Text(
                             text = "• $tip",
@@ -441,7 +456,7 @@ private fun OfflineTreatmentCard(
 
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Guidance only — verify on the plant before treating.",
+                text = "Guidance only — confirm the diagnosis before removing a plant or applying products.",
                 fontSize = 11.sp,
                 color = Color(0xFF9E9E9E)
             )
@@ -452,6 +467,7 @@ private fun OfflineTreatmentCard(
 @Composable
 private fun TreatmentCardHeader(
     isHealthy: Boolean,
+    isViral: Boolean,
     accent: Color,
     sourceLabel: String?,
     rescanRequired: Boolean = false
@@ -476,6 +492,7 @@ private fun TreatmentCardHeader(
                 text = when {
                     rescanRequired -> "CLEARER SCAN NEEDED"
                     isHealthy -> "CARE TIPS"
+                    isViral -> "MANAGEMENT ACTIONS"
                     else -> "TREATMENT RECOMMENDATIONS"
                 },
                 color = accent,
@@ -494,7 +511,7 @@ private fun TreatmentCardHeader(
 }
 
 @Composable
-private fun PreventionHeader() {
+private fun PreventionHeader(isViral: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = Icons.Default.Lightbulb,
@@ -504,7 +521,7 @@ private fun PreventionHeader() {
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = "Prevention",
+            text = if (isViral) "Prevent spread to other plants" else "Prevention",
             fontWeight = FontWeight.Bold,
             fontSize = 14.sp,
             color = Color(0xFFF57F17)

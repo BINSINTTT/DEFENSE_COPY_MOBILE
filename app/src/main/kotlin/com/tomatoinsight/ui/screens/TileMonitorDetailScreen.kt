@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tomatoinsight.api.DiseaseScore
 import com.tomatoinsight.api.diseaseDisplayLabel
+import com.tomatoinsight.api.diseaseFullDisplayLabel
 import com.tomatoinsight.api.inDiseaseDisplayOrder
 import com.tomatoinsight.data.TileScanResult
 import com.tomatoinsight.ui.components.DiseaseTreatmentCard
@@ -214,7 +215,7 @@ private fun CurrentStatusCard(scan: TileScanResult) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = scan.diseaseName,
+                        text = diseaseFullDisplayLabel(scan.diseaseName),
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF212121)
@@ -302,7 +303,7 @@ private fun ScanHistoryCard(
                         }
                     }
                     Text(
-                        text = scan.diseaseName,
+                        text = diseaseFullDisplayLabel(scan.diseaseName),
                         fontSize = 12.sp,
                         color = Color.Gray,
                         maxLines = 1,

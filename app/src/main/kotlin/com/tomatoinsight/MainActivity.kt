@@ -84,7 +84,6 @@ import com.tomatoinsight.data.todayIsoLocal
 import com.tomatoinsight.data.withAuthFallback
 import com.tomatoinsight.ui.components.CreditToast
 import com.tomatoinsight.ui.components.CreditToastHost
-import com.tomatoinsight.ui.components.DemoCheckoutDialog
 import com.tomatoinsight.ui.components.OutOfCreditDialog
 import com.tomatoinsight.ui.components.PageLoadOverlay
 import com.tomatoinsight.ui.screens.AddBlueprintScreen
@@ -197,9 +196,7 @@ fun TomatoInsightApp() {
     var creditsReady by remember { mutableStateOf(signedInAtStart == null || accountCredits != null) }
     var creditToasts by remember { mutableStateOf<List<CreditToast>>(emptyList()) }
     var showOutOfCredit by remember { mutableStateOf(false) }
-    var checkoutPack by remember { mutableStateOf<CreditPack?>(null) }
     var checkoutBusy by remember { mutableStateOf(false) }
-    var checkoutError by remember { mutableStateOf<String?>(null) }
     var payments by remember { mutableStateOf<List<PaymentRecord>>(emptyList()) }
     var paymentsNote by remember { mutableStateOf<String?>(null) }
 
@@ -247,40 +244,32 @@ fun TomatoInsightApp() {
         )
     }
 
-    fun openCheckout(pack: CreditPack) {
-        if (!context.hasValidatedInternet()) return
-        checkoutError = null
-        checkoutBusy = false
-        checkoutPack = pack
+    fun selectPack(pack: CreditPack) {
+        val userId = currentUserId ?: return
+        if (!context.hasValidatedInternet() || checkoutBusy) return
+        scope.launch {
+            checkoutBusy = true
+            try {
+                val result = creditRepository.addTopUpCredits(userId, pack)
+                if (!result.ok) {
+                    showCreditToast("Could not add credits", result.message, "info")
+                    return@launch
+                }
+                result.account?.let { accountCredits = it }
+                showOutOfCredit = false
+                showCreditToast("+${pack.credits} credits added", "", "grant")
+                val listed = creditRepository.listPayments(userId)
+                payments = listed.rows
+                paymentsNote = listed.error
+            } finally {
+                checkoutBusy = false
+            }
+        }
     }
 
     fun openCreditPlans() {
         if (!context.hasValidatedInternet()) return
         navController.navigate("plans")
-    }
-
-    fun payDemoCheckout() {
-        val pack = checkoutPack ?: return
-        val userId = currentUserId ?: return
-        if (checkoutBusy) return
-        scope.launch {
-            checkoutBusy = true
-            checkoutError = null
-            delay(900)
-            val result = creditRepository.addTopUpCredits(userId, pack)
-            checkoutBusy = false
-            if (!result.ok) {
-                checkoutError = result.message.ifBlank { "Could not complete the demo payment." }
-                return@launch
-            }
-            result.account?.let { accountCredits = it }
-            checkoutPack = null
-            showOutOfCredit = false
-            showCreditToast("+${pack.credits} credits added", "", "grant")
-            val listed = creditRepository.listPayments(userId)
-            payments = listed.rows
-            paymentsNote = listed.error
-        }
     }
 
     fun tileCountNow(): Int = if (farmRows > 0 && farmColumns > 0) farmRows * farmColumns else 0
@@ -1060,10 +1049,11 @@ fun TomatoInsightApp() {
         composable("plans") {
             CreditPlansScreen(
                 balance = if (creditsReady) accountCredits?.balance else null,
+                currentPackId = accountCredits?.currentPackId,
                 payments = payments,
                 paymentsNote = paymentsNote,
                 onBack = { navController.popBackStack() },
-                onSelectPack = { openCheckout(it) },
+                onSelectPack = { selectPack(it) },
                 onNavigateToHome = {
                     navController.navigate("dashboard") {
                         popUpTo("dashboard") { inclusive = true }
@@ -1316,7 +1306,7 @@ fun TomatoInsightApp() {
     if (showOutOfCredit) {
         OutOfCreditDialog(
             onDismiss = { showOutOfCredit = false },
-            onSelectPack = { openCheckout(it) },
+            onSelectPack = { selectPack(it) },
             onViewPlans = {
                 if (!context.hasValidatedInternet()) return@OutOfCreditDialog
                 showOutOfCredit = false
@@ -1324,19 +1314,10 @@ fun TomatoInsightApp() {
             }
         )
     }
-    checkoutPack?.let { pack ->
-        DemoCheckoutDialog(
-            pack = pack,
-            busy = checkoutBusy,
-            error = checkoutError,
-            onDismiss = { if (!checkoutBusy) checkoutPack = null },
-            onPay = { payDemoCheckout() }
-        )
-    }
     }
 }
 
-private enum class FarmSyncPhase { Idle, Syncing, Synced }
+
 
 private const val PAGE_MOTION_MS = 340
 private val pageEasing = FastOutSlowInEasing

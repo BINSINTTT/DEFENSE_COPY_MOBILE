@@ -259,7 +259,7 @@ private fun severityColor(label: String): Color = when (label.lowercase()) {
 
 private fun detectedDiseaseTitle(name: String): String = when {
     name.equals("Healthy", ignoreCase = true) -> "Healthy"
-    name.contains("yellow leaf curl", ignoreCase = true) || name.equals("TLCV", ignoreCase = true) ->
+    name.contains("leaf curl", ignoreCase = true) || name.equals("TLCV", ignoreCase = true) ->
         "Tomato Leaf Curl Virus (TLCV)"
     name.contains("spotted wilt", ignoreCase = true) || name.equals("TSWV", ignoreCase = true) ->
         "Tomato Spotted Wilt Virus (TSWV)"

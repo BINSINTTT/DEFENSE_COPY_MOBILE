@@ -945,7 +945,7 @@ private fun TileScanResult.savedDiseaseSummary(): Pair<Double, String> {
     }
     val label = when (bestKey) {
         BAR_HEALTHY -> "Healthy"
-        BAR_TLCV -> "Yellow leaf curl virus"
+        BAR_TLCV -> "Tomato Leaf Curl Virus (TLCV)"
         BAR_EARLY_BLIGHT -> "Early blight"
         BAR_SPOTTED_WILT -> "Spotted wilt"
         else -> ""
@@ -993,8 +993,11 @@ private fun previousRecommendationIfSame(
     val record = previous ?: return null
     val recommendation = record["recommendation"] ?: return null
     if (detected.isEmpty()) return null
-    val guideName = record["recommendation"].asMap()?.get("diseaseName").asText()
-    val guideKey = barKeyForDiseaseName(guideName) ?: return null
+    val recommendationRecord = recommendation.asMap() ?: return null
+    val guideName = recommendationRecord["diseaseName"].asText()
+    val guideKey = barKeyForDiseaseName(guideName)
+        ?: barKeyForDiseaseName(recommendationRecord["topBarKey"].asText())
+        ?: return null
     val cachedKey = record["recommendation"].asMap()?.get("cacheKey").asText()
     val currentKey = scan.response.recommendationCacheKey()
     if (cachedKey.isBlank() || cachedKey != currentKey) return null
@@ -1136,7 +1139,7 @@ private const val TILE_DOC_CHAR_BUDGET = 800_000
 
 private fun diseaseNameForBar(key: String): String = when (key) {
     BAR_HEALTHY -> "Healthy"
-    BAR_TLCV -> "Yellow leaf curl virus"
+    BAR_TLCV -> "Tomato Leaf Curl Virus (TLCV)"
     BAR_EARLY_BLIGHT -> "Early blight"
     BAR_SPOTTED_WILT -> "Spotted wilt"
     else -> ""

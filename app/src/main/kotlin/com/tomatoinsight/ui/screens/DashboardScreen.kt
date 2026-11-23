@@ -1204,7 +1204,7 @@ fun tileNotificationMessages(
     latest.scores.forEach { score ->
         if (score.percent <= 0 || score.name.equals("Healthy", ignoreCase = true)) return@forEach
         val label = when {
-            score.name.contains("yellow leaf curl", ignoreCase = true) -> "TLCV"
+            score.name.contains("leaf curl", ignoreCase = true) -> "TLCV"
             score.name.contains("early blight", ignoreCase = true) -> "Early blight"
             score.name.contains("spotted wilt", ignoreCase = true) -> "Spotted wilt"
             else -> score.name

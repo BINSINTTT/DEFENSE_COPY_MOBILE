@@ -6,6 +6,7 @@ import com.tomatoinsight.api.DISEASE_DISPLAY_ORDER
 import com.tomatoinsight.api.DiseaseScore
 import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.diseaseSeverityLabel
+import com.tomatoinsight.api.diseaseFullDisplayLabel
 import com.tomatoinsight.api.isHealthyDisease
 import com.tomatoinsight.api.normalizeDiseaseKey
 
@@ -18,19 +19,64 @@ data class DiseaseTreatment(
     val isCriticalRemoval: Boolean = false
 )
 
-/** One built-in care plan for the top diagnosis only. Class confidence never selects severity. */
+private fun isViralKey(key: String): Boolean =
+    key.contains("spottedwilt") || key.contains("tswv") ||
+        key.contains("leafcurl") || key.contains("tlcv")
+
+private fun interventionDiseaseName(name: String): String {
+    return diseaseFullDisplayLabel(name)
+}
+
+/** Built-in care plans for each detected class. Only the top diagnosis uses measured severity. */
 fun treatmentsForDetectedScores(
     scores: List<DiseaseScore>,
     severityLabel: String? = null,
     affectedAreaPct: Double? = null
 ): List<DiseaseTreatment> {
-    val top = scores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 } ?: return emptyList()
-    return listOf(
-        treatmentForTopDisease(
-            diseaseName = top.name,
-            severityLabel = severityLabel,
-            affectedAreaPct = affectedAreaPct
+    val detected = scores.filter { it.percent > 0 }.sortedByDescending { it.percent }
+    return detected.mapIndexed { index, score ->
+        if (index == 0) {
+            treatmentForTopDisease(score.name, severityLabel, affectedAreaPct)
+        } else {
+            treatmentForSecondaryDisease(score.name)
+        }
+    }
+}
+
+private fun treatmentForSecondaryDisease(diseaseName: String): DiseaseTreatment {
+    val key = normalizeDiseaseKey(diseaseName)
+    val base = when {
+        key.contains("earlyblight") || key == "eb" -> earlyBlightTreatment()
+        key.contains("spottedwilt") || key.contains("tswv") -> spottedWiltTreatment()
+        key.contains("leafcurl") || key.contains("tlcv") -> yellowLeafCurlTreatment()
+        isHealthyDisease(diseaseName) -> healthyPlantCare()
+        else -> genericDiseaseTreatment(diseaseName)
+    }
+    if (isHealthyDisease(diseaseName)) {
+        return base.copy(
+            diseaseName = interventionDiseaseName(diseaseName),
+            urgencyNote = "",
+            summary = "Some tissue may appear healthy, but this result does not rule out the other disease detection. Check visible symptoms before acting."
         )
+    }
+    val steps = if (isViralKey(key)) {
+        listOf(
+            "Check the whole plant and nearby plants for symptoms before deciding whether to remove it.",
+            if (key.contains("spottedwilt") || key.contains("tswv"))
+                "Monitor and manage thrips to protect nearby plants."
+            else "Monitor and manage whiteflies to protect nearby plants."
+        )
+    } else {
+        listOf(
+            "Check the leaf and nearby plants for the listed symptoms before treating.",
+            "Keep foliage dry, improve airflow, and monitor for worsening spots."
+        )
+    }
+    return base.copy(
+        diseaseName = interventionDiseaseName(diseaseName),
+        urgencyNote = "",
+        actionSteps = steps,
+        isCriticalRemoval = false
     )
 }
 
@@ -45,13 +91,15 @@ fun treatmentForTopDisease(
         explicitLabel = severityLabel
     )
     val key = normalizeDiseaseKey(diseaseName)
+    val viral = isViralKey(key)
     val extentPct = affectedAreaPct?.let { kotlin.math.round(it).toInt().coerceIn(0, 100) }
 
     if (severity == "Unable to Assess" && !isHealthyDisease(diseaseName)) {
         return DiseaseTreatment(
-            diseaseName = diseaseName,
+            diseaseName = interventionDiseaseName(diseaseName),
             urgencyNote = "A clearer scan is needed before a care plan can be selected.",
-            summary = "The disease classifier identified the most likely condition, but the affected leaf area could not be measured reliably. Do not start treatment from this image alone.",
+            summary = if (viral) "A viral disease is suspected, but the affected leaf area could not be measured. Viral infections have no cure; check the whole plant before deciding whether to remove it."
+                else "The disease classifier identified the most likely condition, but the affected leaf area could not be measured reliably. Do not start treatment from this image alone.",
             actionSteps = listOf(
                 "Place one tomato leaf against a plain, evenly lit background.",
                 "Keep the full leaf visible and remove hands, soil, other leaves, and shadows from the frame.",
@@ -63,9 +111,59 @@ fun treatmentForTopDisease(
     val base = when {
         key.contains("earlyblight") || key == "eb" -> earlyBlightTreatment()
         key.contains("spottedwilt") || key.contains("tswv") -> spottedWiltTreatment()
-        key.contains("yellowleafcurl") || key.contains("tlcv") -> yellowLeafCurlTreatment()
+        key.contains("leafcurl") || key.contains("tlcv") -> yellowLeafCurlTreatment()
         isHealthyDisease(diseaseName) -> healthyPlantCare()
         else -> genericDiseaseTreatment(diseaseName)
+    }
+
+    if (viral) {
+        val spottedWilt = key.contains("spottedwilt") || key.contains("tswv")
+        val steps = when {
+            spottedWilt && severity == "Mild" -> listOf(
+                "Check the whole plant and nearby plants; confirm the suspected virus before removing a plant.",
+                "Monitor for thrips and manage them to protect nearby plants, following local product labels.",
+                "Remove nearby weeds that can host thrips and the virus."
+            )
+            spottedWilt && severity == "Moderate" -> listOf(
+                "Check the whole plant and seek confirmation promptly; consider removing it if infection is confirmed, especially when young.",
+                "Monitor and manage thrips to limit spread to nearby plants, following local product labels.",
+                "Remove nearby weeds that can host thrips and the virus.",
+                "Inspect neighboring tomato plants for new symptoms."
+            )
+            spottedWilt -> listOf(
+                "Seek confirmation urgently; if infection is confirmed, remove the whole plant to limit virus spread.",
+                "Monitor and manage thrips to protect nearby plants, following local product labels.",
+                "Remove nearby weeds that can host thrips and the virus.",
+                "Inspect neighboring tomato plants promptly."
+            )
+            severity == "Mild" -> listOf(
+                "Check new growth and nearby plants; confirm the suspected virus before removing a plant.",
+                "Monitor and manage whiteflies, especially under leaves, to protect nearby plants.",
+                "Rescan if visible symptoms increase."
+            )
+            severity == "Moderate" -> listOf(
+                "Check the whole plant and seek confirmation promptly; consider removing confirmed infected plants when infection is limited in the plot.",
+                "Monitor and manage whiteflies to protect nearby plants, following local product labels.",
+                "Remove nearby weeds and inspect neighboring plants for curling and yellowing."
+            )
+            else -> listOf(
+                "Seek confirmation urgently; if infection is confirmed, remove the whole plant to protect nearby plants.",
+                "Monitor and manage whiteflies to limit spread, following local product labels.",
+                "Remove nearby weeds and inspect neighboring tomato plants promptly."
+            )
+        }
+        val extent = extentPct?.let { " · $it% affected" }.orEmpty()
+        val urgency = when (severity) {
+            "Severe" -> "Severe$extent: follow the urgent management steps now."
+            "Moderate" -> "Moderate$extent: begin the management steps this week."
+            else -> "Mild$extent: use the early management steps and monitor closely."
+        }
+        return base.copy(
+            diseaseName = interventionDiseaseName(diseaseName),
+            urgencyNote = urgency,
+            actionSteps = steps,
+            isCriticalRemoval = severity == "Severe"
+        )
     }
 
     val critical =
@@ -107,7 +205,7 @@ fun treatmentForTopDisease(
     }
 
     return base.copy(
-        diseaseName = diseaseName,
+        diseaseName = interventionDiseaseName(diseaseName),
         urgencyNote = urgency,
         actionSteps = steps.distinct(),
         isCriticalRemoval = critical
@@ -134,34 +232,30 @@ private fun earlyBlightTreatment() = DiseaseTreatment(
 private fun spottedWiltTreatment() = DiseaseTreatment(
     diseaseName = "Spotted wilt",
     urgencyNote = "",
-    summary = "Tomato spotted wilt virus (TSWV) is spread by thrips and causes bronze spots, rings, and stunted growth.",
+    summary = "Suspected tomato spotted wilt virus (TSWV) has no cure. Thrips spread it between plants; this leaf's visible severity does not confirm whole-plant infection.",
     actionSteps = listOf(
-        "Remove and destroy infected plants immediately to limit spread.",
-        "Control thrips with insecticidal soap or approved products; focus on undersides of leaves.",
-        "Use reflective mulch early in the season to repel thrips.",
-        "Remove weeds near the farm that host thrips and the virus.",
-        "Do not replant tomatoes in the same bed without thrips management."    
+        "Check the whole plant and confirm the suspected virus before removing it.",
+        "Monitor and manage thrips to protect nearby plants; follow locally approved product labels."
     ),
     preventionTips = listOf(
+        "Thrips carry tomato spotted wilt virus from infected plants to healthy plants; monitor and manage them.",
         "Use TSWV-resistant tomato varieties when available.",
-        "Install fine mesh row covers until plants flower, if practical."
+        "Use healthy transplants and remove weeds that may host thrips."
     )
 )
 
 private fun yellowLeafCurlTreatment() = DiseaseTreatment(
-    diseaseName = "Yellow leaf curl virus",
+    diseaseName = "Tomato Leaf Curl Virus (TLCV)",
     urgencyNote = "",
-    summary = "Tomato yellow leaf curl virus (TYLCV) causes upward curling, yellowing, and reduced fruit set; whiteflies spread it.",
+    summary = "Suspected tomato leaf curl virus has no cure. Whiteflies spread leaf curl viruses between plants; this leaf's visible severity does not confirm whole-plant infection.",
     actionSteps = listOf(
-        "Remove severely infected plants to protect nearby healthy ones.",
-        "Control whiteflies with yellow sticky traps and approved insecticides.",
-        "Spray undersides of leaves where whiteflies feed; repeat as directed.",
-        "Remove solanaceous weeds (tomato relatives) around the field.",
-        "Avoid bringing new plants from unknown sources into the farm."
+        "Check the whole plant and confirm the suspected virus before removing it.",
+        "Monitor and manage whiteflies to protect nearby plants; follow locally approved product labels."
     ),
     preventionTips = listOf(
-        "Plant TYLCV-tolerant varieties where the virus is common.",
-        "Inspect new growth twice weekly for curling and whitefly activity."
+        "Whiteflies carry tomato leaf curl virus from infected plants to healthy plants; monitor and manage them.",
+        "Use healthy transplants and leaf curl virus-resistant varieties where available.",
+        "Inspect nearby plants for curling, yellowing, and whitefly activity."
     )
 )
 
@@ -275,10 +369,16 @@ data class SavedRecommendation(
     }
 }
 
-/** Keeps exactly one care section for the top diagnosis and the measured severity. */
+/** Adds safe guidance for each returned detection without sharing the top result's severity. */
 fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
+    // Offline classification may show a disease result, but cannot create a care plan.
+    // A server response can still carry a guide after this scan reconnects.
+    if (stage == "offline" && recommendationSource == "rules" && severityAssessable != true) {
+        return copy(aiRecommendations = null, recommendationSource = null)
+    }
+    if (stage == "offline" && !hasAiRecommendations) return this
     if (awaitingOpenCvSeverity()) return this
-    val top = allDiseaseScores
+    val detected = allDiseaseScores
         .filter { it.percent > 0 }
         .sortedWith(
             compareByDescending<DiseaseScore> { it.percent }
@@ -288,9 +388,12 @@ fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
                     }.let { if (it < 0) Int.MAX_VALUE else it }
                 }
         )
-        .firstOrNull() ?: return this
+    val top = detected.firstOrNull() ?: return this
 
     fun sectionMatches(section: AiRecommendationSection, score: DiseaseScore): Boolean {
+        val sectionBar = barKeyForDiseaseName(section.disease.orEmpty())
+        val scoreBar = barKeyForDiseaseName(score.name)
+        if (sectionBar != null && scoreBar != null) return sectionBar == scoreBar
         val a = normalizeDiseaseKey(section.disease.orEmpty())
         val b = normalizeDiseaseKey(score.name)
         if (a.isBlank() || b.isBlank()) return false
@@ -302,10 +405,15 @@ fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
         (severityAssessable == false || severity == "Unable to Assess")
     val fromServer = aiRecommendations?.sections.orEmpty().firstOrNull { sectionMatches(it, top) }
     val section = if (fromServer != null && !mustUseRescanGuide) {
-        fromServer.copy(
-            disease = fromServer.disease?.ifBlank { top.name } ?: top.name,
-            confidencePercent = top.percent
-        )
+        if (isViralKey(normalizeDiseaseKey(top.name))) {
+            // Mirror the website: Groq cannot replace reviewed viral spread guidance.
+            treatmentForTopDisease(top.name, severity, affectedAreaPct).toAiSection(top.percent)
+        } else {
+            fromServer.copy(
+                disease = fromServer.disease?.ifBlank { top.name } ?: top.name,
+                confidencePercent = top.percent
+            )
+        }
     } else {
         treatmentForTopDisease(
             diseaseName = top.name,
@@ -313,11 +421,20 @@ fun ValidationResponse.ensureGuidesForAllDetections(): ValidationResponse {
             affectedAreaPct = affectedAreaPct
         ).toAiSection(top.percent)
     }
+    val primary = if (isHealthyDisease(top.name) && detected.any { !isHealthyDisease(it.name) }) {
+        section.copy(
+            urgency = "Review the possible disease detection below and continue monitoring.",
+            summary = "Healthy tissue may be present, but this result does not rule out the other model detection. Check visible symptoms before acting."
+        )
+    } else section
+    val additional = detected.drop(1).map { score ->
+        treatmentForSecondaryDisease(score.name).toAiSection(score.percent)
+    }
     return copy(
         aiRecommendations = AiRecommendations(
-            primaryDisease = section.disease ?: top.name,
-            combinedNote = section.summary,
-            sections = listOf(section)
+            primaryDisease = primary.disease ?: top.name,
+            combinedNote = primary.summary,
+            sections = listOf(primary) + additional
         ),
         recommendationSource = recommendationSource ?: "rules"
     )
@@ -349,8 +466,9 @@ fun ValidationResponse.recommendationCacheKey(): String {
         ?.toString()
         ?: "na"
     return listOf(
+        "multi-guides-v2",
         topKey,
-        (top?.percent ?: 0).toString(),
+        allDiseaseScores.recommendationScoresKey(),
         severityLabel.orEmpty().lowercase(),
         area,
         (severityAssessable == true).toString()
@@ -360,6 +478,7 @@ fun ValidationResponse.recommendationCacheKey(): String {
 /** Care guide returned by the server for this scan, in the shape stored on plantNames. */
 fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
     val filled = ensureGuidesForAllDetections()
+    if (filled.stage == "offline" && !filled.hasAiRecommendations) return null
     val top = filled.allDiseaseScores.maxByOrNull { it.percent } ?: return null
     if (top.percent <= 0) return null
     val sections = filled.aiRecommendations?.sections.orEmpty().filter { section ->
@@ -369,22 +488,22 @@ fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
     val section = sections.firstOrNull { item ->
         val disease = item.disease.orEmpty()
         disease.isNotBlank() && (
-            disease.equals(top.name, ignoreCase = true) ||
+            barKeyForDiseaseName(disease) == barKeyForDiseaseName(top.name) ||
+                disease.equals(top.name, ignoreCase = true) ||
                 normalizeDiseaseKey(disease) == normalizeDiseaseKey(top.name)
             )
     } ?: sections.first()
-    val guides = listOf(section).map { item ->
+    val guides = sections.mapIndexed { index, item ->
         SavedGuide(
             diseaseName = item.disease?.trim().orEmpty().ifBlank { top.name },
             confidencePercent = item.confidencePercent ?: 0,
-            severityLabel = filled.severityLabel.orEmpty(),
-            affectedAreaPct = filled.affectedAreaPct,
+            severityLabel = if (index == 0) filled.severityLabel.orEmpty() else "Unable to Assess",
+            affectedAreaPct = if (index == 0) filled.affectedAreaPct else null,
             urgencyNote = item.urgency?.trim().orEmpty(),
             summary = item.summary?.trim().orEmpty(),
             actionSteps = item.steps.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.take(12),
             preventionTips = item.prevention.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.take(8),
-            isCriticalRemoval = item.isCriticalRemoval
-                ?: (!isHealthyDisease(item.disease.orEmpty()) && (item.confidencePercent ?: 0) >= 100)
+            isCriticalRemoval = item.isCriticalRemoval == true
         )
     }
     val critical = section.isCriticalRemoval
@@ -409,10 +528,10 @@ fun ValidationResponse.asSavedRecommendation(): SavedRecommendation? {
     )
 }
 
-/** Rebuild the single top-diagnosis section from a saved recommendation. */
+/** Rebuild every saved detection's care section. */
 fun SavedRecommendation.asAiRecommendations(): AiRecommendations? {
     val sections = when {
-        guides.isNotEmpty() -> guides.take(1).map { guide ->
+        guides.isNotEmpty() -> guides.take(DISEASE_DISPLAY_ORDER.size).map { guide ->
             AiRecommendationSection(
                 disease = guide.diseaseName,
                 confidencePercent = guide.confidencePercent,
@@ -440,6 +559,6 @@ fun SavedRecommendation.asAiRecommendations(): AiRecommendations? {
     return AiRecommendations(
         primaryDisease = sections.first().disease ?: diseaseName,
         combinedNote = summary.ifBlank { sections.first().summary },
-        sections = listOf(sections.first())
+        sections = sections
     )
 }

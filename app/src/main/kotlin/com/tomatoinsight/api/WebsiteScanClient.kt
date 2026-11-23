@@ -37,7 +37,7 @@ object WebsiteScanClient {
             )
         }
 
-        val leafHits = extractHits(payload)
+            val leafHits = extractHits(payload)
         val bestLeaf = leafHits.maxByOrNull { it.second }
         val leafName = bestLeaf?.first
         val leafConfidence = bestLeaf?.second ?: 0.0
@@ -425,7 +425,7 @@ object WebsiteScanClient {
         }
         return mapOf(
             "healthy" to best("healthy"),
-            "tlcv" to best("yellowleafcurlvirus", "yellow leaf curl virus", "tlcv", "yellow leaf curl"),
+            "tlcv" to best("yellowleafcurlvirus", "yellow leaf curl virus", "tomatoleafcurlvirus", "tomatoleafcurlvirustlcv", "tomato leaf curl virus", "tlcv", "yellow leaf curl"),
             "early_blight" to best("earlyblightvirus", "early blight", "earlyblight"),
             "spotted_wilt" to best("spottedwiltvirus", "spotted wilt", "spottedwilt", "tswv")
         )
@@ -437,7 +437,7 @@ object WebsiteScanClient {
         val key = normalizeDiseaseKey(displayName)
         return when {
             key.contains("healthy") -> "healthy"
-            key.contains("yellowleafcurl") || key == "tlcv" -> "tlcv"
+            key.contains("leafcurl") || key == "tlcv" -> "tlcv"
             key.contains("earlyblight") -> "early_blight"
             key.contains("spottedwilt") || key == "tswv" -> "spotted_wilt"
             else -> null

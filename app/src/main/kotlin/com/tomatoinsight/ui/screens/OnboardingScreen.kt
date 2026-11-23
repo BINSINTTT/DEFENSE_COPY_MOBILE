@@ -102,7 +102,7 @@ private val classificationSlides = listOf(
         imageRes = R.drawable.onboarding_healthy
     ),
     ClassificationSlide(
-        title = "Yellow leaf curl virus",
+        title = "Tomato Leaf Curl Virus (TLCV)",
         detail = "Leaves curl upward, turn yellow, and fruit set drops. Whiteflies spread this virus between plants. Remove severely infected plants and check new growth for whiteflies.",
         accent = Color(0xFF78510B),
         darkThemeAccent = Color(0xFFF2C778),

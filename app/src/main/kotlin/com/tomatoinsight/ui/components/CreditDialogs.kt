@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.tomatoinsight.data.CREDIT_PACKS
 import com.tomatoinsight.data.CreditPack
-import com.tomatoinsight.data.formatPhp
 import com.tomatoinsight.ui.theme.TomatoRed
 import com.tomatoinsight.util.hasValidatedInternet
 import com.tomatoinsight.util.observeValidatedInternet
@@ -153,7 +152,7 @@ fun OutOfCreditDialog(
                 Text("Out of credit", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = Color(0xFF243046))
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "Each saved scan uses 1 credit. Pick a pack to open the free demo checkout (Pay ₱0).",
+                    "Each saved scan uses 1 credit. Choose a demo pack to add credits instantly at no charge.",
                     color = Color(0xFF667085),
                     fontSize = 14.sp
                 )
@@ -192,79 +191,6 @@ fun OutOfCreditDialog(
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Not now", color = Color(0xFF243046))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun DemoCheckoutDialog(
-    pack: CreditPack,
-    busy: Boolean,
-    error: String?,
-    onDismiss: () -> Unit,
-    onPay: () -> Unit
-) {
-    Dialog(onDismissRequest = { if (!busy) onDismiss() }) {
-        Surface(shape = RoundedCornerShape(20.dp), color = Color.White) {
-            Column(modifier = Modifier.padding(18.dp)) {
-                Text(
-                    "Demo checkout",
-                    color = TomatoRed,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    "Pay ₱0 to add credits",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
-                    color = Color(0xFF243046)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    "${pack.name} · ${pack.credits} credits",
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFF243046)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                CheckoutLine("Listed price", formatPhp(pack.listPricePhp))
-                CheckoutLine("You pay today", "₱0")
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "This is a free demo. No card is charged. A paid row is still saved in Firestore so you can query purchases.",
-                    color = Color(0xFF667085),
-                    fontSize = 13.sp
-                )
-                if (!error.isNullOrBlank()) {
-                    Text(
-                        text = error,
-                        color = TomatoRed,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = onDismiss,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Cancel")
-                    }
-                    Button(
-                        onClick = onPay,
-                        enabled = !busy,
-                        modifier = Modifier.weight(1.4f),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFE53935)
-                        )
-                    ) {
-                        Text(if (busy) "Processing…" else "Pay ₱0 (demo)", fontWeight = FontWeight.Bold)
-                    }
                 }
             }
         }
@@ -335,7 +261,7 @@ fun CreditPackCard(
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    text = formatPhp(pack.listPricePhp),
+                    text = pack.credits.toString(),
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 36.sp,
                     color = ink,
@@ -343,7 +269,7 @@ fun CreditPackCard(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "/pack",
+                    text = "credits · no charge",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 15.sp,
                     color = muted,
@@ -419,16 +345,5 @@ private fun PlanFeatureRow(
             lineHeight = 20.sp,
             modifier = Modifier.weight(1f)
         )
-    }
-}
-
-@Composable
-private fun CheckoutLine(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, color = Color(0xFF667085))
-        Text(value, fontWeight = FontWeight.Bold, color = Color(0xFF243046))
     }
 }

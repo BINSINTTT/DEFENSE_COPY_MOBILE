@@ -208,16 +208,23 @@ val DEFAULT_DISEASE_CLASSES = DISEASE_DISPLAY_ORDER
 
 fun diseaseDisplayLabel(name: String): String = when {
     name.equals("Healthy", ignoreCase = true) -> "Healthy"
-    name.contains("yellow leaf curl", ignoreCase = true) || name.equals("TLCV", ignoreCase = true) -> "TLCV"
+    name.contains("leaf curl", ignoreCase = true) || name.equals("TLCV", ignoreCase = true) -> "TLCV"
     name.contains("early blight", ignoreCase = true) -> "Early Blight"
     name.contains("spotted wilt", ignoreCase = true) -> "Spotted Wilt"
     else -> name
 }
 
+/** Full disease name for intervention and scan history, including older saved scans. */
+fun diseaseFullDisplayLabel(name: String): String {
+    val key = normalizeDiseaseKey(name)
+    return if (key.contains("leafcurl") || key.contains("tlcv") || key.contains("tylcv"))
+        "Tomato Leaf Curl Virus (TLCV)" else name
+}
+
 fun List<DiseaseScore>.inDiseaseDisplayOrder(): List<DiseaseScore> {
-    val byKey = associateBy { normalizeDiseaseKey(it.name) }
+    val byKey = associateBy { diseaseDisplayLabel(it.name) }
     return DISEASE_DISPLAY_ORDER.map { name ->
-        val existing = byKey[normalizeDiseaseKey(name)]
+        val existing = byKey[diseaseDisplayLabel(name)]
         DiseaseScore(
             name = name,
             abbreviation = diseaseAbbreviation(name),
@@ -228,7 +235,7 @@ fun List<DiseaseScore>.inDiseaseDisplayOrder(): List<DiseaseScore> {
 
 fun diseaseAbbreviation(name: String): String = when {
     name.equals("Healthy", ignoreCase = true) -> "Healthy"
-    name.contains("yellow leaf curl", ignoreCase = true) -> "TLCV"
+    name.contains("leaf curl", ignoreCase = true) || name.equals("TLCV", ignoreCase = true) -> "TLCV"
     name.contains("spotted wilt", ignoreCase = true) -> "TSWV"
     name.contains("early blight", ignoreCase = true) -> "EB"
     else -> name.split(" ").take(2).joinToString("") { it.first().uppercaseChar().toString() }

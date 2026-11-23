@@ -296,7 +296,10 @@ internal fun PlantInfoScreen(
                 recommendationPendingSave = isSavedScan &&
                     !hasPendingSave &&
                     merged.hasAiRecommendations
-                showIntervention = true
+                showIntervention = merged.hasAiRecommendations
+                if (!merged.hasAiRecommendations) {
+                    validationError = "Care recommendations are unavailable. Connect and try again."
+                }
             } catch (e: Exception) {
                 Log.e("TomatoInsight", "Recommendation fetch failed", e)
                 validationError = e.message ?: "Could not load the care recommendation."
@@ -710,10 +713,7 @@ internal fun PlantInfoScreen(
                             val awaitingSeverity = displayResult?.awaitingOpenCvSeverity() == true
                             val needsOnlineRecommendation = !awaitingSeverity &&
                                 displayResult?.stage == "offline" &&
-                                displayResult.recommendationSource != "groq"
-                            val showsRescanGuidance = displayResult?.severityAssessable == false &&
-                                displayResult.allDiseaseScores.maxByOrNull { it.percent }
-                                    ?.let { !isHealthyDisease(it.name) } == true
+                                !displayResult.ensureGuidesForAllDetections().hasAiRecommendations
                             val canViewIntervention = !awaitingSeverity &&
                                 displayResult?.allDiseaseScores?.any { it.percent > 0 } == true &&
                                 !isValidating &&
@@ -762,8 +762,6 @@ internal fun PlantInfoScreen(
                                     Text(
                                         text = when {
                                             isLoadingRecommendation -> "Preparing care plan..."
-                                            showsRescanGuidance && carePlanOpen -> "Hide rescan guidance"
-                                            showsRescanGuidance -> "View rescan guidance"
                                             carePlanOpen -> "Hide Intervention"
                                             else -> "View Intervention"
                                         },

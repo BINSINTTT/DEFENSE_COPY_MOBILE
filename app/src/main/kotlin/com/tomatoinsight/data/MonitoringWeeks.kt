@@ -121,7 +121,7 @@ fun barKeyForDiseaseName(name: String): String? {
     val key = normalizeDiseaseKey(name)
     return when {
         key == "healthy" -> BAR_HEALTHY
-        key.contains("yellowleafcurl") || key == "tlcv" || key.contains("tylcv") -> BAR_TLCV
+        key.contains("leafcurl") || key == "tlcv" || key.contains("tylcv") -> BAR_TLCV
         key.contains("earlyblight") -> BAR_EARLY_BLIGHT
         key.contains("spottedwilt") || key == "tswv" -> BAR_SPOTTED_WILT
         else -> null

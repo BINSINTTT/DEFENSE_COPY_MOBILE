@@ -685,8 +685,7 @@ private fun HistoryDetailDialog(
                         saved.cacheKey == result.recommendationCacheKey()
     }
     val needsOnlineRecommendation = scan.response.stage == "offline" &&
-        loadedRecommendation?.recommendationSource != "groq" &&
-        compatibleSavedRecommendation?.guides.isNullOrEmpty()
+        loadedRecommendation?.hasAiRecommendations != true
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
@@ -710,7 +709,7 @@ private fun HistoryDetailDialog(
                 }
                 loadedRecommendation = server.ensureGuidesForAllDetections()
                 loadedRecommendation?.let(onRecommendationSaved)
-                if (openCare) showCare = true
+                if (openCare) showCare = loadedRecommendation?.hasAiRecommendations == true
             } catch (_: Exception) {
                 if (openCare) showCare = false
             } finally {
@@ -784,9 +783,6 @@ private fun HistoryDetailDialog(
                     }
                 }
                 if (result.allDiseaseScores.any { it.percent > 0 } && !result.awaitingOpenCvSeverity()) {
-                    val showsRescanGuidance = result.severityAssessable == false &&
-                        result.allDiseaseScores.maxByOrNull { it.percent }
-                            ?.let { !isHealthyDisease(it.name) } == true
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = {
@@ -805,8 +801,6 @@ private fun HistoryDetailDialog(
                         Text(
                             when {
                                 isLoadingRecommendation -> "Preparing care plan..."
-                                showsRescanGuidance && showCare && internetAvailable -> "Hide rescan guidance"
-                                showsRescanGuidance -> "View rescan guidance"
                                 showCare && internetAvailable -> "Hide Intervention"
                                 else -> "View Intervention"
                             }

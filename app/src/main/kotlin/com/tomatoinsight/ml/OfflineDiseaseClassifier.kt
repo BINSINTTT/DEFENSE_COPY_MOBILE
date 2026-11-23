@@ -88,7 +88,6 @@ object OfflineDiseaseClassifier {
         }
         val acceptedPredictions = confidentDiseasePredictions(decoded)
         val top = acceptedPredictions.maxByOrNull { it.confidence ?: 0.0 }
-        val keptOnlineCare = top != null && leaf.aiRecommendations != null
         return leaf.copy(
             predictions = acceptedPredictions,
             topDisease = top?.displayName,
@@ -98,14 +97,12 @@ object OfflineDiseaseClassifier {
             modelPath = MODEL_ASSET,
             message = if (top == null) {
                 "No disease detection reached 20% confidence. Scan another tomato leaf in bright, even light."
-            } else if (keptOnlineCare) {
-                leaf.message ?: "Tomato leaf detected."
             } else {
                 "Detected on this phone. Scan online to measure affected leaf area and prepare the right care plan."
             },
-            aiRecommendations = if (keptOnlineCare) leaf.aiRecommendations else null,
-            aiRecommendationError = if (top != null) leaf.aiRecommendationError else null,
-            recommendationSource = if (top != null) leaf.recommendationSource ?: "rules" else null
+            aiRecommendations = null,
+            aiRecommendationError = null,
+            recommendationSource = null
         ).ensureGuidesForAllDetections()
     }
 
