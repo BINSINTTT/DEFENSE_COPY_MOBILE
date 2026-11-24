@@ -203,6 +203,7 @@ fun TomatoInsightApp() {
     var selectedTile by remember { mutableStateOf<Int?>(null) }
     var monitoringTile by remember { mutableStateOf<Int?>(null) }
     var monitoringWeek by remember { mutableStateOf<Int?>(null) }
+    var scanRevisions by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var viewingSavedScan by remember { mutableStateOf(false) }
     val tileScanHistory = remember { mutableStateMapOf<Int, MutableList<com.tomatoinsight.data.TileScanResult>>() }
 
@@ -396,6 +397,7 @@ fun TomatoInsightApp() {
 
     LaunchedEffect(currentUserId, syncAttempt) {
         tileScanHistory.clear()
+        scanRevisions = emptyMap()
         selectedTile = null
         monitoringTile = null
         monitoringWeek = null
@@ -452,6 +454,7 @@ fun TomatoInsightApp() {
                     return@collect
                 }
                 val farm = update.farm
+                scanRevisions = farm.scanRevisions
                 val disk = farmRepository.loadForUser(userId)
                 val mergedDeletions = mergeDeletions(disk.deletions + farmDeletions, farm.deletions)
                 val memoryHistory = tileScanHistory.mapValues { it.value.toList() }
@@ -1082,12 +1085,16 @@ fun TomatoInsightApp() {
             }
             val tileForDraft = selectedTile
             val accountDrafts = scanDrafts
+            var openedRevision by remember(tileForDraft) {
+                mutableStateOf(accountDrafts[tileForDraft]?.openedRevision ?: scanRevisions[tileForDraft].orEmpty())
+            }
             PlantInfoScreen(
                 tileNumber = tileForDraft,
                 initialDraft = tileForDraft?.let { accountDrafts[it] },
                 onDraftChanged = { draft ->
                     if (tileForDraft != null) {
                         if (draft == null) accountDrafts.remove(tileForDraft) else {
+                            draft.openedRevision = openedRevision
                             accountDrafts[tileForDraft] = draft
                             scope.launch { draft.compactPhoto() }
                         }
@@ -1124,17 +1131,46 @@ fun TomatoInsightApp() {
                             "signed-out",
                             "Sign in to use scan credits."
                         )
+                    val week = drafted.weekNumber
+                        ?: selectedFarmWeek.takeIf { it in FIRST_FARM_WEEK..LAST_FARM_WEEK }
+                        ?: scanCalendar.resolvedFarmWeek()
+                        ?: FIRST_FARM_WEEK
+                    // Wall-clock time for sync/deletes; calendar day only for reminders.
+                    val now = System.currentTimeMillis()
+                    val dayIso = if (scanCalendar.enabled) scanCalendar.asOfIso() else todayIsoLocal()
+                    val stamped = drafted.copy(
+                        weekNumber = week,
+                        scannedAtMillis = now,
+                        scanId = now,
+                        scanDayIso = dayIso
+                    )
+                    val onlineSave = context.hasValidatedInternet()
+                    val expectedRevision = openedRevision
+                    val revision = java.util.UUID.randomUUID().toString()
+                    var conflict: ScanSaveOutcome.TileChanged? = null
                     val charge = creditRepository.spendForSuccessfulScan(
                         uid = userId,
-                        offline = !context.hasValidatedInternet()
-                    )
+                        offline = !onlineSave
+                    ) { tx, account ->
+                        firestoreFarmRepository.writeTileScan(tx, account, tile, listOf(stamped),
+                            trimmedName, expectedRevision, revision) { conflict = it }
+                    }
                     if (!charge.ok) {
+                        if (charge.code == "tile-changed") conflict?.let {
+                            openedRevision = it.revision
+                            viewingSavedScan = true
+                            return@PlantInfoScreen it
+                        }
                         if (charge.code == "insufficient-credits") showOutOfCredit = true
                         charge.account?.let { accountCredits = it }
                         return@PlantInfoScreen ScanSaveOutcome.Blocked(
                             charge.code,
                             charge.message.ifBlank { "Could not use a scan credit." }
                         )
+                    }
+                    if (onlineSave) {
+                        openedRevision = revision
+                        scanRevisions = scanRevisions + (tile to revision)
                     }
                     try {
                         farmDeletions = farmDeletions.filter { it.tileNumber != tile }
@@ -1144,21 +1180,9 @@ fun TomatoInsightApp() {
                                 plantRecommendations = plantRecommendations + (tile to guide)
                             }
                         }
-                        val week = drafted.weekNumber
-                            ?: selectedFarmWeek.takeIf { it in FIRST_FARM_WEEK..LAST_FARM_WEEK }
-                            ?: scanCalendar.resolvedFarmWeek()
-                            ?: FIRST_FARM_WEEK
-                        // Wall-clock time for sync/deletes; calendar day only for reminders.
-                        val now = System.currentTimeMillis()
-                        val dayIso = if (scanCalendar.enabled) scanCalendar.asOfIso() else todayIsoLocal()
-                        val stamped = drafted.copy(
-                            weekNumber = week,
-                            scannedAtMillis = now,
-                            scanId = now,
-                            scanDayIso = dayIso
-                        )
                         val existing = tileScanHistory[tile]
                             .orEmpty()
+                            .filterNot { it.weekNumber == week && it.scannedAtMillis == now }
                             .sortedWith(compareBy({ it.scannedAtMillis }, { it.scanId }))
                         val removedIds = if (existing.size >= MAX_SAVED_WEEKS) {
                             listOf(existing.last().scanId)
@@ -1190,16 +1214,6 @@ fun TomatoInsightApp() {
                             tileScanHistory.mapValues { it.value.toList() },
                             plantNames
                         )
-                        if (context.hasValidatedInternet()) {
-                            runCatching {
-                                firestoreFarmRepository.saveTileScan(
-                                    uid = userId,
-                                    tileNumber = tile,
-                                    scans = updated,
-                                    plantName = trimmedName
-                                )
-                            }.onFailure { cloudError = it.message }
-                        }
                         charge.account?.let { accountCredits = it }
                         showCreditToast(
                             "1 credit deducted",
@@ -1208,6 +1222,8 @@ fun TomatoInsightApp() {
                         )
                         ScanSaveOutcome.Saved
                     } catch (_: Exception) {
+                        // An online transaction already committed the scan and its charge together.
+                        if (onlineSave) return@PlantInfoScreen ScanSaveOutcome.Saved
                         creditRepository.refundScanCredit(userId, charge.queuedOffline)
                             ?.let { accountCredits = it }
                         ScanSaveOutcome.Blocked(

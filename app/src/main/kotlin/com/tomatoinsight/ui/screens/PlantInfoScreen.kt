@@ -87,6 +87,7 @@ import kotlinx.coroutines.withTimeout
 
 /** Session-only photo and result for an unfinished scan on one farm tile. */
 internal class TileScanDraft(bitmap: Bitmap, var name: String) {
+    var openedRevision: String? = null
     var result: ValidationResponse? = null
     private var original: Bitmap? = bitmap
     private var jpeg: ByteArray? = null
@@ -155,6 +156,7 @@ internal fun PlantInfoScreen(
     var isSyncingSeverity by remember { mutableStateOf(false) }
     var recommendationPendingSave by remember(tileNumber) { mutableStateOf(false) }
     var plantNameInput by remember(tileNumber) { mutableStateOf(initialDraft?.name ?: plantName) }
+    var conflictMessage by remember(tileNumber) { mutableStateOf<String?>(null) }
     var isSavingInfo by remember { mutableStateOf(false) }
     val internetAvailable by produceState(initialValue = context.hasValidatedInternet(), context) {
         context.observeValidatedInternet().collect { value = it }
@@ -423,6 +425,17 @@ internal fun PlantInfoScreen(
             onClose = { showLeafCamera = false }
         )
         return
+    }
+
+    conflictMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { conflictMessage = null },
+            title = { Text("Tile changed") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { conflictMessage = null }) { Text("OK") }
+            }
+        )
     }
 
     if (showOfflineRecommendationAlert) {
@@ -833,6 +846,22 @@ internal fun PlantInfoScreen(
                                             isSavedScan = true
                                             hasPendingSave = false
                                             recommendationPendingSave = false
+                                        } else if (outcome is ScanSaveOutcome.TileChanged) {
+                                            onDraftChanged(null)
+                                            draft = null
+                                            hasPendingSave = false
+                                            recommendationPendingSave = false
+                                            awaitingRecommendation = false
+                                            capturedImage = outcome.scan?.image
+                                            validationResult = outcome.scan?.response
+                                            plantNameInput = outcome.name
+                                            isSavedScan = outcome.scan != null
+                                            showIntervention = false
+                                            conflictMessage = if (outcome.revision.isEmpty()) {
+                                                "The plant on this tile was removed."
+                                            } else {
+                                                "This tile already has a saved plant."
+                                            }
                                         } else if (outcome is ScanSaveOutcome.Blocked && outcome.code != "insufficient-credits") {
                                             snackbarHostState.showSnackbar(outcome.message)
                                         }

@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import com.google.android.gms.tasks.Tasks
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.Transaction
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.MetadataChanges
@@ -100,6 +102,7 @@ data class CloudFarm(
     val profile: FarmerProfile = FarmerProfile(),
     val selectedFarmWeek: Int = FIRST_FARM_WEEK,
     val scanCalendar: ScanCalendar = ScanCalendar(),
+    val scanRevisions: Map<Int, String> = emptyMap(),
     val plantNamesFromCloud: Boolean = false
 ) {
     val hasSharedData: Boolean
@@ -349,8 +352,18 @@ class FirestoreFarmRepository {
 
         mergedHistory.forEach { (tile, scans) ->
             if (tile in removedTiles) return@forEach
-            if (scans.isNotEmpty()) {
-                saveTileScan(uid, tile, scans, mergedNames[tile].orEmpty())
+            val remote = cloud.history[tile].orEmpty()
+            val pending = scans.filter { scan ->
+                remote.none { it.weekNumber == scan.weekNumber && it.scannedAtMillis == scan.scannedAtMillis }
+            }
+            if (pending.isEmpty()) return@forEach
+            val user = FirebaseFirestore.getInstance().collection("users").document(uid)
+            val revision = java.util.UUID.randomUUID().toString()
+            withContext(Dispatchers.IO) {
+                Tasks.await(user.firestore.runTransaction { tx ->
+                    writeTileScan(tx, tx.get(user), tile, scans, mergedNames[tile].orEmpty(),
+                        cloud.scanRevisions[tile].orEmpty(), revision)
+                })
             }
         }
         // Only push deletes for tiles Firestore still has, so the phone never restores them.
@@ -391,22 +404,45 @@ class FirestoreFarmRepository {
      * Writes one tile in the same shape the website stores:
      * scores, top disease, week history, and the photo.
      */
-    suspend fun saveTileScan(
-        uid: String,
+    fun writeTileScan(
+        tx: Transaction,
+        account: DocumentSnapshot,
         tileNumber: Int,
         scans: List<TileScanResult>,
-        plantName: String
-    ) = withContext(Dispatchers.IO) {
-        if (scans.isEmpty()) return@withContext
-        val userRef = FirebaseFirestore.getInstance().collection("users").document(uid)
+        plantName: String,
+        expectedRevision: String,
+        revision: String,
+        onConflict: ((ScanSaveOutcome.TileChanged) -> Unit)? = null
+    ): Boolean {
+        val userRef = account.reference
+        val id = tileNumber.toString()
+        val tileRef = userRef.collection("tiles").document(id)
+        val tile = tx.get(tileRef)
+        val previous = account.get("plantNames").asMap().orEmpty()[id]
+        val currentRevision = tile.getString("scanRevision")
+            ?: if (tile.exists() || previous.savedPlantName().isNotBlank()) "legacy" else ""
+        if (currentRevision != expectedRevision) {
+            onConflict?.let { notify ->
+                val data = tile.data.orEmpty()
+                val guide = data["recommendation"].asPlantRecommendation()
+                    ?: previous.asSavedPlant()?.recommendation
+                val scansOnTile = data.toTileScans(tileNumber, guide)
+                val current = scansOnTile.firstOrNull { it.weekNumber == data["weekNumber"].asInt() }
+                    ?: scansOnTile.maxByOrNull { it.scannedAtMillis }
+                notify(ScanSaveOutcome.TileChanged(currentRevision,
+                    data.savedPlantName().ifBlank { previous.savedPlantName() }, current))
+            }
+            return false
+        }
         val byWeek = linkedMapOf<Int, TileScanResult>()
         scans.sortedBy { it.scannedAtMillis }.forEach { scan ->
             val week = canonicalWeek(scan.weekNumber) ?: FIRST_FARM_WEEK
             byWeek[week] = scan
         }
-        val tileRef = userRef.collection("tiles").document(tileNumber.toString())
-        val existing = runCatching { Tasks.await(tileRef.get()).data }.getOrNull().orEmpty()
-        val existingWeeks = existing["weeks"].asMap().orEmpty()
+        val existing = tile.data.orEmpty()
+        val existingWeeks = existing["weeks"].asMap() ?: existing["weekNumber"].asInt()?.let {
+            mapOf(it.toString() to existing)
+        }.orEmpty()
         val latest = byWeek.values.maxByOrNull { it.scannedAtMillis }
             ?: scans.maxBy { it.scannedAtMillis }
         val weeks = linkedMapOf<String, Map<String, Any?>>()
@@ -439,15 +475,14 @@ class FirestoreFarmRepository {
             isoTimestamp(System.currentTimeMillis())
         )
         if (recommendation != null) record["recommendation"] = recommendation.withoutHealthyDiseaseName()
-        record = record.shrunkToFit()
-        Tasks.await(tileRef.set(record.withoutNulls(), SetOptions.merge()))
-
+        record["scanRevision"] = revision
+        tx.set(tileRef, record.shrunkToFit().withoutNulls())
         if (name.isNotEmpty()) {
-            val snapshot = Tasks.await(userRef.get())
-            val previous = snapshot.get("plantNames").asMap().orEmpty()[tileNumber.toString()]
-            val entry = plantNameEntry(name, latest, previous)
-            writePlantNameEntry(userRef, tileNumber, entry)
+            val entry = plantNameEntry(name, latest, previous) + ("scanRevision" to revision)
+            tx.set(userRef, mapOf("plantNames" to mapOf(id to entry)),
+                SetOptions.mergeFields("plantNames.$id"))
         }
+        return true
     }
 
     /**
@@ -534,6 +569,9 @@ private fun RawCloudBundle.toCloudFarm(): CloudFarm {
             nextDue = calendar?.get("nextDue").asText(),
             selected = calendar?.get("selected").asText()
         ),
+        scanRevisions = (names.keys + tiles.keys.mapNotNull { it.toIntOrNull() }).associateWith { tile ->
+            tiles[tile.toString()]?.get("scanRevision") as? String ?: "legacy"
+        },
         plantNamesFromCloud = source.containsKey("plantNames") || names.isNotEmpty()
     )
 }

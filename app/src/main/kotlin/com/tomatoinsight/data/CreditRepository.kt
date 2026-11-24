@@ -4,6 +4,8 @@ import android.content.Context
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Transaction
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.channels.awaitClose
@@ -128,6 +130,7 @@ data class PaymentListResult(
 
 sealed class ScanSaveOutcome {
     object Saved : ScanSaveOutcome()
+    data class TileChanged(val revision: String, val name: String, val scan: TileScanResult?) : ScanSaveOutcome()
     data class Blocked(val code: String, val message: String) : ScanSaveOutcome()
 }
 
@@ -256,20 +259,25 @@ class CreditRepository(context: Context) {
      */
     suspend fun spendForSuccessfulScan(
         uid: String,
-        offline: Boolean = false
+        offline: Boolean = false,
+        saveOnline: ((Transaction, DocumentSnapshot) -> Boolean)? = null
     ): CreditAction = withContext(Dispatchers.IO) {
         spendLock.withLock {
             if (offline) return@withLock spendFromCache(uid)
             try {
                 ensureAccountCredits(uid)
             } catch (_: Exception) {
-                return@withLock spendFromCache(uid)
+                if (saveOnline == null) return@withLock spendFromCache(uid)
+                return@withLock CreditAction(false, "save-failed", "Could not reach your farm. Try again.")
             }
 
             val userRef = db.collection("users").document(uid)
             try {
                 val stored = Tasks.await(db.runTransaction { transaction ->
                     val snap = transaction.get(userRef)
+                    if (saveOnline?.invoke(transaction, snap) == false) {
+                        throw IllegalStateException("tile-changed")
+                    }
                     val node = snap.get("credits").asStringMap().toAccountCredits()
                     val pending = pendingSpendCount(uid)
                     if (!node.signupGranted || node.balance - pending < SCAN_CREDIT_COST) {
@@ -286,6 +294,9 @@ class CreditRepository(context: Context) {
                 val visible = overlayPending(uid, stored)
                 CreditAction(ok = true, balance = visible.balance, account = visible)
             } catch (error: Exception) {
+                if (error.containsReason("tile-changed")) {
+                    return@withLock CreditAction(false, "tile-changed", "The saved plant on this tile changed.")
+                }
                 if (error.containsReason("insufficient-credits")) {
                     val snap = runCatching { Tasks.await(userRef.get()) }.getOrNull()
                     val stored = snap?.get("credits").asStringMap()?.toAccountCredits()
@@ -299,7 +310,8 @@ class CreditRepository(context: Context) {
                         message = "A successful scan uses 1 credit. You have none left."
                     )
                 }
-                spendFromCache(uid)
+                if (saveOnline == null) spendFromCache(uid)
+                else CreditAction(false, "save-failed", "Could not save this plant. Try again.")
             }
         }
     }
