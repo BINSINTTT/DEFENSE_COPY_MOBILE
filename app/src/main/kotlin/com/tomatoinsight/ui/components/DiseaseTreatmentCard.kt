@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tomatoinsight.api.AiRecommendationSection
 import com.tomatoinsight.api.ValidationResponse
+import com.tomatoinsight.api.displaySeverity
 import com.tomatoinsight.api.isHealthyDisease
 import com.tomatoinsight.api.diseaseFullDisplayLabel
 import com.tomatoinsight.api.normalizeDiseaseKey
@@ -61,7 +62,7 @@ fun DiseaseTreatmentCard(
     val withAllGuides = result.ensureGuidesForAllDetections()
     if (result.stage == "offline" && !withAllGuides.hasAiRecommendations) return
     if (withAllGuides.hasAiRecommendations) {
-        GroqTreatmentCard(withAllGuides)
+        InterventionGuideCard(withAllGuides)
         return
     }
     val detected = treatmentsForDetectedScores(
@@ -79,7 +80,7 @@ fun DiseaseTreatmentCard(
     if (saved != null) {
         val fromSaved = saved.asAiRecommendations()
         if (fromSaved != null) {
-            GroqTreatmentCard(
+            InterventionGuideCard(
                 result.copy(
                     aiRecommendations = fromSaved,
                     recommendationSource = "rules"
@@ -187,7 +188,7 @@ private fun SavedRecommendationCard(guide: SavedRecommendation) {
 }
 
 @Composable
-private fun GroqTreatmentCard(result: ValidationResponse) {
+internal fun InterventionGuideCard(result: ValidationResponse) {
     val ai = result.aiRecommendations ?: return
     val sections = ai.sections.orEmpty()
     if (sections.isEmpty()) return
@@ -213,7 +214,7 @@ private fun GroqTreatmentCard(result: ValidationResponse) {
                 AiRecommendationSectionBlock(
                     section = section,
                     isSecondary = index > 0,
-                    severityLabel = if (index == 0) result.severityLabel else null,
+                    severityLabel = if (index == 0) result.displaySeverity(section.disease).takeUnless { it == "—" } else null,
                     rescanRequired = index == 0 &&
                         !isHealthyDisease(section.disease.orEmpty()) &&
                         result.severityAssessable == false

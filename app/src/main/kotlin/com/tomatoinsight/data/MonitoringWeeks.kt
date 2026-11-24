@@ -1,6 +1,7 @@
 package com.tomatoinsight.data
 
 import android.graphics.Bitmap
+import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.displaySeverity
 import com.tomatoinsight.api.normalizeDiseaseKey
 import kotlin.math.abs
@@ -29,7 +30,8 @@ data class FarmWeekScan(
     val topBarKey: String?,
     val topPct: Int,
     val image: Bitmap?,
-    val severity: String
+    val severity: String,
+    val response: ValidationResponse
 )
 
 data class MonitoringTile(
@@ -144,6 +146,7 @@ private fun TileScanResult.toFarmWeekScan(weekNumber: Int): FarmWeekScan {
         topBarKey = barKeyForDiseaseName(diseaseName),
         topPct = percent.coerceIn(0, 100),
         image = image,
-        severity = response.displaySeverity(diseaseName.takeIf { percent > 0 })
+        severity = response.displaySeverity(diseaseName.takeIf { percent > 0 }),
+        response = response
     )
 }

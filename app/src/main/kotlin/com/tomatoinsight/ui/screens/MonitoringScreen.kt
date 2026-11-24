@@ -59,6 +59,8 @@ import com.tomatoinsight.data.BAR_EARLY_BLIGHT
 import com.tomatoinsight.data.BAR_HEALTHY
 import com.tomatoinsight.data.BAR_SPOTTED_WILT
 import com.tomatoinsight.data.BAR_TLCV
+import androidx.compose.runtime.key
+import com.tomatoinsight.ui.components.ScanIntervention
 import com.tomatoinsight.ui.components.ScanResultMetrics
 import com.tomatoinsight.data.FarmWeekScan
 import com.tomatoinsight.data.MONITORING_BAR_KEYS
@@ -235,9 +237,9 @@ fun MonitoringScreen(
                 )
                 if (chosen != null) {
                     if (past != null) {
-                        WeekScanCard(scan = past)
+                        key(selectedTile, past.weekNumber, past.savedAtMillis) { WeekScanCard(scan = past) }
                     }
-                    WeekScanCard(scan = chosen)
+                    key(selectedTile, chosen.weekNumber, chosen.savedAtMillis) { WeekScanCard(scan = chosen) }
                 }
             }
         }
@@ -734,6 +736,7 @@ private fun WeekScanCard(scan: FarmWeekScan) {
                 )
                 Spacer(modifier = Modifier.height(8.dp))
             }
+            ScanIntervention(scan.response)
         }
     }
 }

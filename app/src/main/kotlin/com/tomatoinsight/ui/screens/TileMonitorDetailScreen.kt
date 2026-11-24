@@ -50,6 +50,7 @@ import com.tomatoinsight.api.diseaseFullDisplayLabel
 import com.tomatoinsight.api.inDiseaseDisplayOrder
 import com.tomatoinsight.data.TileScanResult
 import com.tomatoinsight.api.displaySeverity
+import com.tomatoinsight.ui.components.ScanIntervention
 import com.tomatoinsight.ui.components.ScanResultMetrics
 import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoRed
@@ -315,6 +316,7 @@ private fun ScanHistoryCard(
                 MiniScoreBar(score = score, compact = true)
                 Spacer(modifier = Modifier.height(4.dp))
             }
+            ScanIntervention(scan.response)
         }
     }
 }

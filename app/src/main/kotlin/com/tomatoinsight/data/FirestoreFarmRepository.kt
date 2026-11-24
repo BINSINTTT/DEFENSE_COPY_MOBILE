@@ -12,6 +12,7 @@ import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import com.tomatoinsight.api.DiseasePrediction
 import com.tomatoinsight.api.DiseaseScore
+import com.tomatoinsight.api.displaySeverity
 import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.diseaseAbbreviation
 import com.tomatoinsight.api.isHealthyDisease
@@ -130,7 +131,8 @@ private data class WeekSnap(
     val severityLabel: String? = null,
     val affectedAreaPct: Double? = null,
     val severityAssessable: Boolean? = null,
-    val severityReason: String? = null
+    val severityReason: String? = null,
+    val intervention: SavedRecommendation? = null
 )
 
 class FirestoreFarmRepository {
@@ -417,7 +419,14 @@ class FirestoreFarmRepository {
             }
         }
         byWeek.forEach { (week, scan) ->
-            weeks[week.toString()] = scan.toFirestoreWeek(includeImage = true)
+            val snapshot = scan.toFirestoreWeek(includeImage = true).toMutableMap()
+            val guide = scan.response.takeIf { it.hasAiRecommendations }?.asSavedRecommendation()
+            if (guide != null) {
+                snapshot["intervention"] = plantRecommendationRecord(
+                    scan, guide, scan.savedDiseaseSummary(), isoTimestamp(scan.scannedAtMillis)
+                )
+            }
+            weeks[week.toString()] = snapshot
         }
         var record = latest.toFirestoreWeek(includeImage = true).toMutableMap()
         record["weeks"] = weeks
@@ -492,9 +501,11 @@ private fun RawCloudBundle.toCloudFarm(): CloudFarm {
 
     val history = tiles.mapNotNull { (id, data) ->
         val tileNumber = id.toIntOrNull() ?: return@mapNotNull null
-        val scans = data.toTileScans(tileNumber)
-            .map { scan -> scan.applySavedDisease(savedPlants[tileNumber]) }
-        if (scans.isEmpty()) null else tileNumber to scans
+        val scans = data.toTileScans(tileNumber, recommendations[tileNumber])
+        val latestWeek = canonicalWeek(data["weekNumber"].asInt()) ?: scans.maxOfOrNull { it.weekNumber ?: 0 }
+        if (scans.isEmpty()) null else tileNumber to scans.map { scan ->
+            if (scan.weekNumber == latestWeek) scan.applySavedDisease(savedPlants[tileNumber]) else scan
+        }
     }.toMap()
 
     val calendar = source["scanCalendar"].asMap()
@@ -541,7 +552,10 @@ private fun itToDeletion(entry: Map<String, Any?>): FarmDeletion? {
     )
 }
 
-private fun Map<String, Any?>.toTileScans(tileNumber: Int): List<TileScanResult> {
+internal fun Map<String, Any?>.toTileScans(
+    tileNumber: Int,
+    latestGuide: SavedRecommendation? = null
+): List<TileScanResult> {
     val parentScores = scoreMap()
     val parentTopBar = this["topBarKey"].asText().ifBlank { null }
     val parentTopPct = this["topPct"].asDouble() ?: 0.0
@@ -550,8 +564,10 @@ private fun Map<String, Any?>.toTileScans(tileNumber: Int): List<TileScanResult>
         val scan = value.asMap() ?: return@forEach
         val rawWeek = (scan["weekNumber"] ?: key).asInt()
         val week = canonicalWeek(rawWeek) ?: return@forEach
-        val snap = scan.toWeekSnap(week)?.withParentScores(parentScores, parentTopBar, parentTopPct)
-            ?: return@forEach
+        val snapshot = scan.toWeekSnap(week) ?: return@forEach
+        val snap = if (week == canonicalWeek(this["weekNumber"].asInt())) {
+            snapshot.withParentScores(parentScores, parentTopBar, parentTopPct)
+        } else snapshot
         if (weeks[week] == null || rawWeek != 3) weeks[week] = snap
     }
 
@@ -570,11 +586,12 @@ private fun Map<String, Any?>.toTileScans(tileNumber: Int): List<TileScanResult>
 
     return weeks.values
         .sortedBy { it.weekNumber }
-        .mapNotNull { it.toScan(tileNumber) }
+        .mapNotNull { week -> week.toScan(tileNumber, latestGuide.takeIf { week.weekNumber == topWeek }) }
 }
 
 private fun Map<String, Any?>.toWeekSnap(weekNumber: Int): WeekSnap? {
     if (!hasSavedInfo()) return null
+    val scores = scoreMap()
     val diseaseLabel = listOf("topBarKey", "diseaseLabel", "diseaseName", "topDisease")
         .firstNotNullOfOrNull { field -> this[field].asText().ifBlank { null } }
     val diseasePct = listOf("topPct", "diseasePct", "percent")
@@ -583,7 +600,7 @@ private fun Map<String, Any?>.toWeekSnap(weekNumber: Int): WeekSnap? {
         weekNumber = weekNumber,
         savedAt = this["savedAt"].asTimestampText(),
         scanDayIso = this["scanDayIso"].asText(),
-        scores = scoreMap(),
+        scores = scores,
         topBarKey = diseaseLabel,
         topPct = diseasePct,
         imageDataUrl = this["imageDataUrl"].asText().ifBlank { null },
@@ -591,7 +608,13 @@ private fun Map<String, Any?>.toWeekSnap(weekNumber: Int): WeekSnap? {
         affectedAreaPct = (this["affectedAreaPct"] ?: this["affected_area_pct"])
             .asDouble()?.coerceIn(0.0, 100.0),
         severityAssessable = (this["severityAssessable"] ?: this["severity_assessable"]) as? Boolean,
-        severityReason = (this["severityReason"] ?: this["severity_reason"]).asText().ifBlank { null }
+        severityReason = (this["severityReason"] ?: this["severity_reason"]).asText().ifBlank { null },
+        intervention = this["intervention"].asMap()?.takeIf { guide ->
+            val savedScores = guide["scoresKey"].asText()
+            savedScores.isEmpty() || savedScores.split('|').associate { entry ->
+                entry.substringBefore(':') to entry.substringAfter(':').toDoubleOrNull()
+            } == MONITORING_BAR_KEYS.associateWith { scores[it] ?: 0.0 }
+        }?.asPlantRecommendation()
     )
 }
 
@@ -760,7 +783,7 @@ private fun TileScanResult.applySavedDisease(plant: SavedPlant?): TileScanResult
     )
 }
 
-private fun WeekSnap.toScan(tileNumber: Int): TileScanResult? {
+private fun WeekSnap.toScan(tileNumber: Int, latestGuide: SavedRecommendation?): TileScanResult? {
     val savedAtMillis = parseTimestamp(savedAt).takeIf { it > 0L } ?: (tileNumber * 100L + weekNumber)
     val topKey = topBarKey?.let(::barKeyForDiseaseName) ?: barKeyForDiseaseName(
         scores.maxByOrNull { it.value }?.key.orEmpty()
@@ -782,6 +805,38 @@ private fun WeekSnap.toScan(tileNumber: Int): TileScanResult? {
     }
     val diseaseName = monitoringResultLabel(topKey) ?: diseaseNameForBar(topKey.orEmpty()).ifBlank { "Saved" }
     val healthy = topKey == null || topKey == BAR_HEALTHY
+    val response = ValidationResponse(
+        result = "TomatoLeaf",
+        confidence = 1.0,
+        minConfidence = 0.0,
+        detectedClass = "SavedScan",
+        stage = "saved",
+        topDisease = diseaseNameForBar(topKey.orEmpty()).ifBlank { null },
+        topDiseaseConfidence = topPercent / 100.0,
+        predictions = scoreList.map { score ->
+            DiseasePrediction(
+                className = score.name,
+                confidence = score.percent / 100.0
+            )
+        },
+        diseaseClasses = scoreList.map { it.name },
+        severityLabel = severityLabel,
+        affectedAreaPct = affectedAreaPct,
+        severityAssessable = severityAssessable,
+        severityReason = severityReason
+    )
+    val savedGuide = (intervention ?: latestGuide)?.takeIf { guide ->
+        if (guide.cacheKey.isNotBlank()) {
+            guide.cacheKey == response.recommendationCacheKey()
+        } else {
+            // The website embeds its guide in the week and uses a different cache key.
+            guide === intervention && topPercent > 0 &&
+                barKeyForDiseaseName(guide.diseaseName) == topKey &&
+                guide.diagnosisConfidencePercent == topPercent &&
+                guide.affectedAreaPct == affectedAreaPct &&
+                guide.severityLabel.equals(response.displaySeverity(diseaseName), ignoreCase = true)
+        }
+    }
     return TileScanResult(
         scanId = savedAtMillis + weekNumber,
         scannedAtMillis = savedAtMillis,
@@ -793,26 +848,7 @@ private fun WeekSnap.toScan(tileNumber: Int): TileScanResult? {
         percent = topPercent,
         isHealthy = healthy,
         scores = scoreList,
-        response = ValidationResponse(
-            result = "TomatoLeaf",
-            confidence = 1.0,
-            minConfidence = 0.0,
-            detectedClass = "SavedScan",
-            stage = "saved",
-            topDisease = diseaseNameForBar(topKey.orEmpty()).ifBlank { null },
-            topDiseaseConfidence = topPercent / 100.0,
-            predictions = scoreList.map { score ->
-                DiseasePrediction(
-                    className = score.name,
-                    confidence = score.percent / 100.0
-                )
-            },
-            diseaseClasses = scoreList.map { it.name },
-            severityLabel = severityLabel,
-            affectedAreaPct = affectedAreaPct,
-            severityAssessable = severityAssessable,
-            severityReason = severityReason
-        ),
+        response = if (savedGuide == null) response else response.copy(aiRecommendations = savedGuide.asAiRecommendations()),
         image = decodeImageDataUrl(imageDataUrl)
     )
 }
@@ -1193,9 +1229,9 @@ private fun Any?.asPlantRecommendation(): SavedRecommendation? {
     return SavedRecommendation(
         diseaseName = diseaseName,
         diagnosisConfidencePercent = record["diagnosisConfidencePercent"].asInt()?.coerceIn(0, 100)
-            ?: record["topPct"].asScorePercent()?.toPercent()
+            ?: (record["topPct"] ?: record["pct"]).asScorePercent()?.toPercent()
             ?: 0,
-        severityLabel = record["severityLabel"].asText().take(40),
+        severityLabel = (record["severityLabel"] ?: record["severity"]).asText().take(40),
         affectedAreaPct = record["affectedAreaPct"].asDouble()?.coerceIn(0.0, 100.0),
         severityAssessable = record["severityAssessable"] as? Boolean ?: false,
         cacheKey = record["cacheKey"].asText().take(160),

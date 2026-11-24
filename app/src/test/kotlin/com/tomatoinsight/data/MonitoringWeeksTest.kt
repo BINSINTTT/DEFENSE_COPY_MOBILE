@@ -7,6 +7,28 @@ import org.junit.Test
 
 class MonitoringWeeksTest {
     @Test
+    fun monitoringRestoresOnlyTheGuideMatchingThatWeeksScan() {
+        val guide = mapOf(
+            "diseaseName" to "Early blight", "pct" to 92, "severity" to "Mild",
+            "affectedAreaPct" to 12.0, "summary" to "Saved Week 4 guidance",
+            "scoresKey" to "healthy:0|tlcv:0|early_blight:92|spotted_wilt:0"
+        )
+        val first = mapOf(
+            "scores" to mapOf("early_blight" to 92), "severityLabel" to "Mild",
+            "affectedAreaPct" to 12.0, "severityAssessable" to true, "intervention" to guide
+        )
+        val later = first + mapOf("severityLabel" to "Severe", "affectedAreaPct" to 74.0)
+        val record = mapOf("weekNumber" to 6, "weeks" to mapOf("4" to first, "6" to later))
+        val weeks = mapOf(1 to record.toTileScans(1)).toMonitoringTiles().single().weeks
+        val saved = weeks.first().response
+        assertEquals("Saved Week 4 guidance", saved.ensureGuidesForAllDetections().aiRecommendations?.sections?.first()?.summary)
+        val fallback = weeks.last().response
+        assertEquals(false, fallback.hasAiRecommendations)
+        assertEquals(true, fallback.ensureGuidesForAllDetections().hasAiRecommendations)
+        assertEquals("Severe", weeks.last().severity)
+    }
+
+    @Test
     fun comparisonUsesEachWeeksMeasuredSeverityWithTheSameClassificationScore() {
         val response = listOf(DiseaseScore("Early blight", "EB", 92)).asSavedValidationResponse()
         val first = requireNotNull(response.copy(affectedAreaPct = 74.0).toTileScanResult(1))
