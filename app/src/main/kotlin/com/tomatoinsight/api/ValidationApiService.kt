@@ -267,6 +267,14 @@ fun diseaseSeverityLabel(
     return explicitLabel?.takeIf { it.isNotBlank() } ?: "Unable to Assess"
 }
 
+/** Severity shown on plant tiles and saved monitoring scans. */
+fun ValidationResponse?.displaySeverity(diseaseName: String?): String = when {
+    diseaseName == null || this == null || awaitingOpenCvSeverity() -> "—"
+    severityAssessable == false -> "Unable to Assess"
+    severityLabel.isNullOrBlank() && affectedAreaPct == null -> "—"
+    else -> diseaseSeverityLabel(diseaseName, affectedAreaPct, severityLabel)
+}
+
 /** @deprecated Prefer [diseaseSeverityLabel] with OpenCV extent, not confidence. */
 fun diseaseSeverityLabel(name: String, confidencePercent: Int): String =
     diseaseSeverityLabel(name, affectedAreaPct = null, explicitLabel = null)

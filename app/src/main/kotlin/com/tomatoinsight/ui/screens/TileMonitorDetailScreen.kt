@@ -1,14 +1,6 @@
 package com.tomatoinsight.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,16 +18,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,7 +49,8 @@ import com.tomatoinsight.api.diseaseDisplayLabel
 import com.tomatoinsight.api.diseaseFullDisplayLabel
 import com.tomatoinsight.api.inDiseaseDisplayOrder
 import com.tomatoinsight.data.TileScanResult
-import com.tomatoinsight.ui.components.DiseaseTreatmentCard
+import com.tomatoinsight.api.displaySeverity
+import com.tomatoinsight.ui.components.ScanResultMetrics
 import com.tomatoinsight.ui.theme.TomatoGreen
 import com.tomatoinsight.ui.theme.TomatoRed
 
@@ -79,7 +68,6 @@ fun TileMonitorDetailScreen(
 ) {
     val latest = scans.firstOrNull()
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var expandedScanId by remember { mutableStateOf<Long?>(null) }
 
     Scaffold(
         topBar = {
@@ -139,7 +127,7 @@ fun TileMonitorDetailScreen(
                     modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)
                 )
                 Text(
-                    text = "${scans.size} scan${if (scans.size == 1) "" else "s"} recorded · tap to view intervention",
+                    text = "${scans.size} scan${if (scans.size == 1) "" else "s"} recorded",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
@@ -148,11 +136,7 @@ fun TileMonitorDetailScreen(
             itemsIndexed(scans, key = { _, scan -> scan.scanId }) { index, scan ->
                 ScanHistoryCard(
                     scan = scan,
-                    isLatest = index == 0,
-                    isExpanded = expandedScanId == scan.scanId,
-                    onClick = {
-                        expandedScanId = if (expandedScanId == scan.scanId) null else scan.scanId
-                    }
+                    isLatest = index == 0
                 )
             }
 
@@ -247,6 +231,9 @@ private fun CurrentStatusCard(scan: TileScanResult) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            val disease = scan.diseaseName.takeIf { scan.percent > 0 }
+            ScanResultMetrics(disease, scan.response.displaySeverity(disease))
+            Spacer(modifier = Modifier.height(10.dp))
             scan.scores.inDiseaseDisplayOrder().forEach { score ->
                 MiniScoreBar(score = score)
                 Spacer(modifier = Modifier.height(6.dp))
@@ -258,19 +245,15 @@ private fun CurrentStatusCard(scan: TileScanResult) {
 @Composable
 private fun ScanHistoryCard(
     scan: TileScanResult,
-    isLatest: Boolean,
-    isExpanded: Boolean,
-    onClick: () -> Unit
+    isLatest: Boolean
 ) {
     val accent = if (scan.isHealthy) HealthyGreen else DiseaseRed
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = if (isExpanded) Color(0xFFFFFDE7) else Color.White,
-        shadowElevation = if (isExpanded) 2.dp else 1.dp
+        color = Color.White,
+        shadowElevation = 1.dp
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
@@ -315,42 +298,22 @@ private fun ScanHistoryCard(
                         color = Color(0xFF9E9E9E)
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "${scan.percent}%",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF212121)
-                    )
-                    Icon(
-                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) "Collapse intervention" else "View intervention",
-                        tint = Color(0xFF757575),
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .size(24.dp)
-                    )
-                }
+                Text(
+                    text = "${scan.percent}%",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF212121)
+                )
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            val disease = scan.diseaseName.takeIf { scan.percent > 0 }
+            ScanResultMetrics(disease, scan.response.displaySeverity(disease))
+            Spacer(modifier = Modifier.height(10.dp))
             scan.scores.inDiseaseDisplayOrder().forEach { score ->
                 MiniScoreBar(score = score, compact = true)
                 Spacer(modifier = Modifier.height(4.dp))
-            }
-
-            AnimatedVisibility(
-                visible = isExpanded,
-                enter = fadeIn(tween(280, easing = FastOutSlowInEasing)) +
-                    expandVertically(tween(320, easing = FastOutSlowInEasing)),
-                exit = fadeOut(tween(200, easing = FastOutSlowInEasing)) +
-                    shrinkVertically(tween(280, easing = FastOutSlowInEasing))
-            ) {
-                Column {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    DiseaseTreatmentCard(result = scan.response)
-                }
             }
         }
     }

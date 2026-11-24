@@ -59,6 +59,7 @@ import com.tomatoinsight.data.BAR_EARLY_BLIGHT
 import com.tomatoinsight.data.BAR_HEALTHY
 import com.tomatoinsight.data.BAR_SPOTTED_WILT
 import com.tomatoinsight.data.BAR_TLCV
+import com.tomatoinsight.ui.components.ScanResultMetrics
 import com.tomatoinsight.data.FarmWeekScan
 import com.tomatoinsight.data.MONITORING_BAR_KEYS
 import com.tomatoinsight.data.MonitoringTile
@@ -714,6 +715,8 @@ private fun WeekScanCard(scan: FarmWeekScan) {
                     Text(text = "No photo saved for this week.", fontSize = 13.sp, color = Muted)
                 }
             }
+            Spacer(modifier = Modifier.height(14.dp))
+            ScanResultMetrics(diseaseName = result, severity = scan.severity)
             Spacer(modifier = Modifier.height(14.dp))
             Text(
                 text = "CLASSIFICATION",

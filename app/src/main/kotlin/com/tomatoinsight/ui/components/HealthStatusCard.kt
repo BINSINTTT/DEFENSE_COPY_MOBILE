@@ -29,7 +29,7 @@ import com.tomatoinsight.api.DiseaseScore
 import com.tomatoinsight.api.ValidationResponse
 import com.tomatoinsight.api.diseaseAbbreviation
 import com.tomatoinsight.api.diseaseDisplayLabel
-import com.tomatoinsight.api.diseaseSeverityLabel
+import com.tomatoinsight.api.displaySeverity
 import com.tomatoinsight.api.isHealthyDisease
 
 private val PanelWhite = Color.White
@@ -60,17 +60,6 @@ fun HealthStatusCard(result: ValidationResponse? = null, loading: Boolean = fals
     }
     val filled = result != null
     val leading = if (filled) scores.maxByOrNull { it.percent }?.takeIf { it.percent > 0 } else null
-    val severity = when {
-        leading == null || result == null || result.awaitingOpenCvSeverity() -> "—"
-        result.severityAssessable == false -> "Unable to Assess"
-        result.severityLabel.isNullOrBlank() && result.affectedAreaPct == null -> "—"
-        else -> diseaseSeverityLabel(leading.name, result.affectedAreaPct, result.severityLabel)
-    }
-    val diseaseTitle = when {
-        leading == null -> "—"
-        else -> detectedDiseaseTitle(leading.name)
-    }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -82,22 +71,7 @@ fun HealthStatusCard(result: ValidationResponse? = null, loading: Boolean = fals
                 .fillMaxWidth()
                 .padding(horizontal = 18.dp, vertical = 20.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                MetricCard(
-                    label = "Detected Disease",
-                    value = diseaseTitle,
-                    modifier = Modifier.weight(1f)
-                )
-                MetricCard(
-                    label = "Symptom Severity",
-                    value = severity,
-                    valueColor = severityColor(severity),
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            ScanResultMetrics(leading?.name, result.displaySeverity(leading?.name))
 
             Spacer(modifier = Modifier.height(18.dp))
 
@@ -112,6 +86,26 @@ fun HealthStatusCard(result: ValidationResponse? = null, loading: Boolean = fals
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun ScanResultMetrics(diseaseName: String?, severity: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        MetricCard(
+            label = "Detected Disease",
+            value = diseaseName?.let(::detectedDiseaseTitle) ?: "—",
+            modifier = Modifier.weight(1f)
+        )
+        MetricCard(
+            label = "Symptom Severity",
+            value = severity,
+            valueColor = severityColor(severity),
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
